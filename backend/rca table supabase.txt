@@ -1,0 +1,468 @@
+RCA Table Creation:
+
+-- 1. Enable pgvector (already enabled if tickets table works)
+CREATE EXTENSION IF NOT EXISTS vector;
+
+
+-- ============================================================
+-- 2. RCA KNOWLEDGE BASE TABLE
+-- ============================================================
+CREATE TABLE IF NOT EXISTS rca_knowledge_base (
+    id                  BIGSERIAL PRIMARY KEY,
+
+    -- Incident classification
+    title               TEXT NOT NULL,
+    category            TEXT NOT NULL,   -- Database, Network, Application, etc.
+
+
+    -- What triggers this RCA entry
+    keywords            TEXT NOT NULL,
+    symptoms            TEXT NOT NULL,
+
+    -- The actual RCA content
+    root_cause          TEXT NOT NULL,
+    affected_component  TEXT NOT NULL,
+    resolution_steps    JSONB NOT NULL DEFAULT '[]',
+    confidence          TEXT NOT NULL CHECK (confidence IN ('HIGH','MEDIUM','LOW')),
+
+    -- metadata
+
+    environment         TEXT DEFAULT 'Production',
+    ci_asset            TEXT,
+    recurrence_count    INT  DEFAULT 1,
+
+    status              TEXT DEFAULT 'Active'
+        CHECK (status IN ('Active','Deprecated','Under Review')),
+
+    -- Semantic search embedding (384-dim, same model as tickets)
+    embedding           VECTOR(384),
+
+    last_used_at        TIMESTAMP,
+    created_at          TIMESTAMP DEFAULT NOW(),
+    updated_at          TIMESTAMP DEFAULT NOW()
+);
+
+
+-- ============================================================
+-- 3. VECTOR INDEX
+-- ============================================================
+CREATE INDEX IF NOT EXISTS idx_rca_kb_embedding
+ON rca_knowledge_base
+USING ivfflat (embedding vector_cosine_ops)
+WITH (lists = 100);
+
+
+-- ============================================================
+-- 4. VECTOR SEARCH FUNCTION
+-- ============================================================
+DROP FUNCTION IF EXISTS match_completed_tickets_with_rca(VECTOR(384), INT);
+
+CREATE OR REPLACE FUNCTION match_completed_tickets_with_rca(
+    query_embedding VECTOR(384),
+    match_count     INT
+)
+RETURNS TABLE (
+    id                  UUID,
+    issue_key           TEXT,
+    summary             TEXT,
+    description         TEXT,
+    status              TEXT,
+    rca_root_cause      TEXT,
+    rca_affected        TEXT,
+    rca_steps           JSONB,
+    rca_confidence      TEXT,
+    rca_source          TEXT,
+    rca_matched_from    TEXT,
+    rca_matched_summary TEXT,
+    similarity          FLOAT
+)
+LANGUAGE sql
+STABLE
+AS $$
+    SELECT
+        id,
+        issue_key,
+        summary,
+        description,
+        status,
+        rca_root_cause,
+        rca_affected,
+        rca_steps,
+        rca_confidence,
+        rca_source,
+        rca_matched_from,
+        rca_matched_summary,
+        1 - (embedding <=> query_embedding) AS similarity
+    FROM tickets
+    WHERE
+        embedding        IS NOT NULL       -- must have a vector
+        AND rca_root_cause IS NOT NULL     -- must have an RCA
+        AND status = 'Completed'           -- only resolved tickets
+        AND is_duplicate = FALSE           -- not a duplicate
+        AND child_key IS NULL              -- parent tickets only (consistent with match_tickets)
+    ORDER BY embedding <=> query_embedding
+    LIMIT match_count;
+$$;
+
+-- Verify it exists:
+SELECT proname, pronargs FROM pg_proc WHERE proname = 'match_completed_tickets_with_rca';
+
+
+
+-- ============================================================
+-- 5. SEED DATA — 14 DETAILED RCA ENTRIES
+--    (covers all runbook categories + common ITSM incidents)
+-- ============================================================
+
+-- RCA 1 — Database Connection Failure
+INSERT INTO rca_knowledge_base (
+    title, category, keywords, symptoms,
+    root_cause, affected_component, resolution_steps,
+    confidence, ci_asset
+) VALUES (
+    'PostgreSQL Max Connections Exhausted',
+    'Database',
+    'database connection timeout, postgres, connection refused, max_connections, connection pool exhausted',
+    'Application throwing DB timeout errors. Connection refused on all attempts. pg_stat_activity shows hundreds of idle connections. Application returning 503 to users.',
+    'The PostgreSQL max_connections limit was reached due to connection pool misconfiguration. Idle connections from application instances were not being released, exhausting all available slots on PROD-DB-01.',
+    'PostgreSQL Connection Pool — PROD-DB-01',
+    '[
+        "Run SELECT count(*) FROM pg_stat_activity; to confirm connection count",
+        "Identify idle connections: SELECT pid, usename, state, query_start FROM pg_stat_activity WHERE state = ''idle'' ORDER BY query_start;",
+        "Terminate idle connections older than 10 minutes: SELECT pg_terminate_backend(pid) FROM pg_stat_activity WHERE state = ''idle'' AND query_start < NOW() - INTERVAL ''10 minutes'';",
+        "Check current max_connections: SHOW max_connections;",
+        "Review connection pool settings in application config (pool_size, max_overflow, pool_timeout)",
+        "Restart the application connection pool if idle connections persist",
+        "Increase max_connections in postgresql.conf if workload justifies it (requires DB restart)",
+        "Configure pg_bouncer as a connection pooler to prevent future recurrence",
+        "Monitor pg_stat_activity after recovery to confirm connections stabilize",
+        "Set up alert: notify if connection count exceeds 80% of max_connections"
+    ]'::jsonb,
+    'HIGH',
+    'PostgreSQL — PROD-DB-01'
+);
+
+-- RCA 2 — Slow DB Queries
+INSERT INTO rca_knowledge_base (
+    title, category, keywords, symptoms,
+    root_cause, affected_component, resolution_steps,
+    confidence, ci_asset
+) VALUES (
+    'Missing Database Index Causing Query Timeout',
+    'Database',
+    'slow query, database timeout, missing index, full table scan, query performance, reporting timeout',
+    'Specific queries timing out. Full table scans visible in EXPLAIN output. Reporting module slow. Database CPU elevated but connections not exhausted.',
+    'Missing index on date-range and foreign key columns caused full table scans on a large table (10M+ rows). A recent schema migration added new filter columns without corresponding indexes.',
+    'PostgreSQL Query Execution Engine — reports table',
+    '[
+        "Identify slow queries: SELECT query, calls, total_time, mean_time FROM pg_stat_statements ORDER BY mean_time DESC LIMIT 20;",
+        "Run EXPLAIN ANALYZE on the slowest query to confirm full table scan",
+        "Identify missing indexes: check for Seq Scan on large tables in EXPLAIN output",
+        "Create the missing index: CREATE INDEX CONCURRENTLY idx_reports_date ON reports(created_at, status);",
+        "CONCURRENTLY flag ensures no table lock during index creation on production",
+        "Verify index is being used: run EXPLAIN ANALYZE again and confirm Index Scan appears",
+        "Run ANALYZE on the table to update query planner statistics",
+        "Review and update the schema migration process to include index creation for new filter columns",
+        "Set pg_stat_statements.track = all in postgresql.conf for future query monitoring",
+        "Add slow query logging: log_min_duration_statement = 1000 (1 second threshold)"
+    ]'::jsonb,
+    'HIGH',
+    'PostgreSQL — reports table'
+);
+
+-- RCA 3 — High CPU
+INSERT INTO rca_knowledge_base (
+    title, category, keywords, symptoms,
+    root_cause, affected_component, resolution_steps,
+    confidence, ci_asset
+) VALUES (
+    'Runaway Process Causing CPU Saturation After Deployment',
+    'Performance',
+    'high cpu, cpu 100%, java process, runaway process, cpu spike after deployment, load average high',
+    'CPU above 95% sustained. Load average critically high. Java process consuming all cores. Request timeouts. Issue started after recent deployment.',
+    'A newly deployed code change introduced an infinite retry loop in the payment processing service.',
+    'Payment Processing Service — APP-01 (Java Application)',
+    '[
+        "Run top or htop to identify the PID consuming highest CPU",
+        "For Java: run jstack <PID> to capture thread dump and identify the spinning thread",
+        "Check application logs for repeated error patterns",
+        "Identify the deployment that introduced the regression",
+        "Initiate rollback of the most recent deployment",
+        "Verify CPU returns to baseline after rollback",
+        "Fix retry logic with exponential backoff",
+        "Add circuit breaker pattern"
+    ]'::jsonb,
+    'HIGH',
+    'APP-01 — Payment Processing Service'
+);
+
+-- RCA 4 — Disk Full
+INSERT INTO rca_knowledge_base (
+    title, category, keywords, symptoms,
+    root_cause, affected_component, resolution_steps,
+    confidence, ci_asset
+) VALUES (
+    'Log Accumulation and Docker Image Buildup Causing Disk Exhaustion',
+    'Storage',
+    'disk full, no space left on device, write failed, disk 100%, logs accumulation',
+    'Disk at 100%. Write failures across all services.',
+    'Log rotation misconfiguration and unused Docker image accumulation exhausted disk space.',
+    '/var partition — FS-01 File Server',
+    '[
+        "Confirm disk usage using df -h",
+        "Find largest directories using du -sh /var/*",
+        "List oversized log files",
+        "Delete old rotated logs",
+        "Prune unused Docker images",
+        "Verify recovered disk space",
+        "Restart impacted services",
+        "Fix logrotate configuration"
+    ]'::jsonb,
+    'HIGH',
+    'FS-01 — /var partition'
+);
+
+-- RCA 5 — Kubernetes Deployment Failure
+INSERT INTO rca_knowledge_base (
+    title, category, keywords, symptoms,
+    root_cause, affected_component, resolution_steps,
+    confidence, ci_asset
+) VALUES (
+    'Missing Environment Variable in ConfigMap Causing CrashLoopBackOff',
+    'Deployment',
+    'kubernetes deployment failed, crashloopbackoff, configmap',
+    'Pods in CrashLoopBackOff after deployment.',
+    'Required DATABASE_URL variable missing from ConfigMap.',
+    'Kubernetes ConfigMap — K8S-PROD cluster',
+    '[
+        "Check pod status using kubectl get pods",
+        "Read crash logs using kubectl logs",
+        "Confirm missing environment variable",
+        "Check current ConfigMap",
+        "Add missing variable to ConfigMap",
+        "Restart deployment",
+        "Verify rollout succeeds"
+    ]'::jsonb,
+    'HIGH',
+    'K8S-PROD — app deployment'
+);
+
+-- RCA 6 — Memory Leak
+INSERT INTO rca_knowledge_base (
+    title, category, keywords, symptoms,
+    root_cause, affected_component, resolution_steps,
+    confidence, ci_asset
+) VALUES (
+    'Cache Without Eviction Policy Causing Memory Leak',
+    'Performance',
+    'memory leak, oom kill, high memory',
+    'Memory usage continuously increasing.',
+    'Cache implementation had no eviction policy.',
+    'ECOM-APP Pod — In-Memory Cache Component',
+    '[
+        "Monitor memory usage",
+        "Check OOM kill history",
+        "Capture heap dump",
+        "Analyze heap dump",
+        "Restart affected pod",
+        "Implement cache eviction policy",
+        "Add cache monitoring"
+    ]'::jsonb,
+    'HIGH',
+    'ECOM-APP Pod — Kubernetes'
+);
+
+-- RCA 7 — API Service Down
+INSERT INTO rca_knowledge_base (
+    title, category, keywords, symptoms,
+    root_cause, affected_component, resolution_steps,
+    confidence, ci_asset
+) VALUES (
+    'Thread Pool Exhaustion Causing API 503',
+    'Application',
+    'api down, 503 error, thread pool exhausted',
+    'API returning 503 on all endpoints.',
+    'Slow database queries exhausted application thread pool.',
+    'API-PROD-01 — Application Thread Pool',
+    '[
+        "Check application logs for thread pool errors",
+        "Restart application service",
+        "Verify health endpoint",
+        "Identify slow queries",
+        "Add missing indexes",
+        "Configure query timeout",
+        "Increase thread pool size"
+    ]'::jsonb,
+    'HIGH',
+    'API-PROD-01'
+);
+
+-- RCA 8 — WiFi Down
+INSERT INTO rca_knowledge_base (
+    title, category, keywords, symptoms,
+    root_cause, affected_component, resolution_steps,
+    confidence, ci_asset
+) VALUES (
+    'Access Point Not Broadcasting SSID',
+    'Network',
+    'wifi down, ssid not visible',
+    'Office WiFi unavailable.',
+    'Access point failed to resume SSID broadcast after reboot.',
+    'Office WiFi Access Point — WIFI-01',
+    '[
+        "Verify AP power status",
+        "SSH into access point",
+        "Check radio status",
+        "Reload access point",
+        "Perform power cycle if needed",
+        "Verify SSID visibility",
+        "Test internet connectivity"
+    ]'::jsonb,
+    'MEDIUM',
+    'Office WiFi — AP-FLOOR2'
+);
+
+-- RCA 9 — SSL Certificate Expired
+INSERT INTO rca_knowledge_base (
+    title, category, keywords, symptoms,
+    root_cause, affected_component, resolution_steps,
+    confidence, ci_asset
+) VALUES (
+    'TLS Certificate Expiry',
+    'Application',
+    'ssl certificate expired, tls error',
+    'HTTPS connections failing.',
+    'TLS certificate expired due to missed renewal.',
+    'API Gateway — TLS Certificate',
+    '[
+        "Check certificate expiry",
+        "Generate or renew certificate",
+        "Install new certificate",
+        "Reload web server",
+        "Verify HTTPS works",
+        "Configure automated renewal"
+    ]'::jsonb,
+    'HIGH',
+    'API Gateway — TLS Certificate'
+);
+
+-- RCA 10 — DNS Resolution Failure
+INSERT INTO rca_knowledge_base (
+    title, category, keywords, symptoms,
+    root_cause, affected_component, resolution_steps,
+    confidence, ci_asset
+) VALUES (
+    'Internal DNS Server Unreachable',
+    'Network',
+    'dns not resolving, dns server unreachable',
+    'Internal hostnames not resolving.',
+    'Firewall rule blocked DNS traffic.',
+    'Internal DNS Server — 10.0.0.53',
+    '[
+        "Confirm DNS issue with nslookup",
+        "Check firewall rules",
+        "Correct blocked port 53 rule",
+        "Verify DNS resolution",
+        "Test affected services",
+        "Add DNS monitoring"
+    ]'::jsonb,
+    'HIGH',
+    'Internal DNS — 10.0.0.53'
+);
+
+-- RCA 11 — Microsoft Auth Failure
+INSERT INTO rca_knowledge_base (
+    title, category, keywords, symptoms,
+    root_cause, affected_component, resolution_steps,
+    confidence, ci_asset
+) VALUES (
+    'Azure AD Token Cache Corruption',
+    'Application',
+    'azure ad, office365 login failure',
+    'Users unable to log in to Microsoft services.',
+    'Corrupted Azure AD token cache.',
+    'Azure AD Token Cache — Authentication Proxy',
+    '[
+        "Check Azure AD health",
+        "Review authentication logs",
+        "Clear token cache",
+        "Restart auth services",
+        "Verify user login",
+        "Set up Azure monitoring"
+    ]'::jsonb,
+    'MEDIUM',
+    'Azure AD / Office365'
+);
+
+-- RCA 12 — Email Notification Delay
+INSERT INTO rca_knowledge_base (
+    title, category, keywords, symptoms,
+    root_cause, affected_component, resolution_steps,
+    confidence, ci_asset
+) VALUES (
+    'SMTP Queue Backup Due to Rate Limiting',
+    'Application',
+    'email delay, smtp queue',
+    'Emails delivered late.',
+    'SMTP provider rate limiting caused queue buildup.',
+    'SMTP Relay — Notification Service Queue',
+    '[
+        "Check SMTP queue depth",
+        "Review rate limit errors",
+        "Reschedule bulk jobs",
+        "Separate transactional email queue",
+        "Implement retry backoff",
+        "Monitor email delivery latency"
+    ]'::jsonb,
+    'MEDIUM',
+    'SMTP Server / Notification Service'
+);
+
+-- RCA 13 — Hardware Display Issue
+INSERT INTO rca_knowledge_base (
+    title, category, keywords, symptoms,
+    root_cause, affected_component, resolution_steps,
+    confidence, ci_asset
+) VALUES (
+    'GPU Driver Conflict Causing Screen Flickering',
+    'Hardware',
+    'screen flickering, gpu driver',
+    'Display corruption and flickering.',
+    'Windows GPU driver conflict.',
+    'Laptop GPU Driver — Hybrid Graphics Subsystem',
+    '[
+        "Check GPU driver version",
+        "Review Windows update history",
+        "Roll back GPU driver",
+        "Install stable driver version",
+        "Update BIOS if needed",
+        "Disable discrete GPU as workaround"
+    ]'::jsonb,
+    'MEDIUM',
+    'Laptop — Hybrid GPU System'
+);
+
+-- RCA 14 — VPN Network Access
+INSERT INTO rca_knowledge_base (
+    title, category, keywords, symptoms,
+    root_cause, affected_component, resolution_steps,
+    confidence, ci_asset
+) VALUES (
+    'VPN Split Tunnel Misconfiguration',
+    'Network',
+    'vpn connected but no access',
+    'VPN connected but internal systems unreachable.',
+    'Internal routes missing from split tunnel configuration.',
+    'VPN Client — Split Tunnel Routing Table',
+    '[
+        "Verify VPN connection",
+        "Check routing table",
+        "Confirm missing internal routes",
+        "Update split tunnel policy",
+        "Reconnect VPN client",
+        "Verify internal access"
+    ]'::jsonb,
+    'MEDIUM',
+    'VPN Infrastructure'
+);
+

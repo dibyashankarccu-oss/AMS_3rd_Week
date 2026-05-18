@@ -1,0 +1,596 @@
+import { useState } from "react";
+import { apiRequest } from "../api/apiClient";
+import PreSearchTicketCard from "../components/PreSearchTicketCard";
+
+export default function SubmitPage() {
+  const [form, setForm] = useState({
+    name: "",
+    email: "",
+    summary: "",
+    description: "",
+
+    app_name: "",
+    component_name: "",
+
+    urgency: "",
+    impact: ""
+  });
+
+  const [loading, setLoading] = useState(false);
+  const [result, setResult] = useState(null);
+  const [searching, setSearching] = useState(false);
+
+  const [showPopup, setShowPopup] = useState(false);
+
+  const [similarTicket, setSimilarTicket] = useState(null);
+
+  const [searchMessage, setSearchMessage] = useState("");
+
+  const appComponents = {
+
+    "Enterprise Incident Management System": [
+      "Ticket Intake API",
+      "Incident Prioritization Engine",
+      "Operations Dashboard"
+    ],
+
+    "Customer Service Request Portal": [
+      "Request Submission Service",
+      "Approval Workflow Engine",
+      "Customer Support UI"
+    ],
+
+    "Production Monitoring Hub": [
+      "Log Aggregation Service",
+      "Alert Correlation Engine",
+      "Monitoring Dashboard"
+    ],
+
+    "Change & Release Management System": [
+      "Release Scheduler",
+      "Deployment Validation Engine",
+      "Release Tracking Portal"
+    ],
+
+    "Application Health Intelligence Platform": [
+      "Health Data Collector",
+      "Root Cause Detection Agent",
+      "Application Health Dashboard"
+    ]
+  };
+
+
+  const urgencyOptions = [
+    "Critical",
+    "High",
+    "Medium",
+    "Low"
+  ];
+
+
+  const impactOptions = [
+    "Extensive",
+    "Significant",
+    "Moderate",
+    "Minor"
+  ];
+
+  function handleChange(e) {
+    const { id, value } = e.target;
+
+    setForm((prev) => {
+
+      const updated = {
+        ...prev,
+        [id]: value
+      };
+
+      // reset component when app changes
+      if (id === "app_name") {
+        updated.component_name = "";
+      }
+
+      return updated;
+    });
+  }
+
+  async function handlePreSearch() {
+    if (!form.summary || !form.description) return;
+
+    if (searching) return;
+
+    setSearching(true);
+    setSearchMessage("");
+    setSimilarTicket(null);
+
+    try {
+      const res = await apiRequest("/tickets/pre-search", "POST", {
+        summary: form.summary,
+        description: form.description,
+        app_name: form.app_name,
+        component_name: form.component_name
+      });
+
+      console.log("PRE SEARCH API RESPONSE:", res);
+
+      // CASE: ticket exists
+      if (res?.ticket) {
+        setSimilarTicket(res.ticket);
+        setSearchMessage("");
+      }
+      // CASE: no ticket found
+      else {
+        setSimilarTicket(null);
+        setSearchMessage("No similar completed tickets found");
+      }
+
+    } catch (err) {
+      setSimilarTicket(null);
+      setSearchMessage("Search failed");
+    } finally {
+      setSearching(false);
+      setShowPopup(true); // 🔥 ALWAYS OPEN POPUP
+    }
+  }
+
+  const appComponentMismatch =
+    (form.app_name && !form.component_name) ||
+    (!form.app_name && form.component_name);
+
+  async function handleSubmit() {
+
+    if (appComponentMismatch) {
+      setResult({
+        ok: false,
+        msg: "Please select both Application and Component"
+      });
+      return;
+    }
+
+    setLoading(true);
+    setResult(null);
+
+    // default values when both empty
+    const payload = {
+      ...form,
+      app_name: form.app_name || "General",
+      component_name: form.component_name || "General"
+    };
+
+    let finished = false;
+
+    // safety timeout
+    const timeoutId = setTimeout(() => {
+
+      if (!finished) {
+
+        setLoading(false);
+
+        setResult({
+          ok: false,
+          msg: "Request is taking longer than expected. Please check status later."
+        });
+
+      }
+
+    }, 10000);
+
+    try {
+
+      const res = await apiRequest(
+        "/submit",
+        "POST",
+        payload
+      );
+
+      finished = true;
+
+      clearTimeout(timeoutId);
+
+      setLoading(false);
+
+      if (!res || res.error) {
+
+        setResult({
+          ok: false,
+          msg: res?.error || "Failed"
+        });
+
+        return;
+      }
+
+      setResult({
+        ok: true,
+        id: res.id
+      });
+
+      // reset form
+      setForm({
+        name: "",
+        email: "",
+        summary: "",
+        description: "",
+        app_name: "",
+        component_name: "",
+        urgency: "",
+        impact: ""
+      });
+
+    } catch (err) {
+
+      finished = true;
+
+      clearTimeout(timeoutId);
+
+      setLoading(false);
+
+      setResult({
+        ok: false,
+        msg: "Network error or server unreachable"
+      });
+
+    }
+
+  }
+
+  return (
+    <div className="min-h-screen bg-gradient-to-br from-[#0a0e1a] via-[#0f1420] to-[#1a1f35] relative">
+      {/* Background elements */}
+      <div className="absolute inset-0 overflow-hidden pointer-events-none">
+        <div className="absolute top-1/4 left-1/4 w-96 h-96 bg-purple-600/10 rounded-full blur-3xl"></div>
+        <div className="absolute bottom-1/4 right-1/4 w-96 h-96 bg-blue-600/10 rounded-full blur-3xl"></div>
+      </div>
+
+      <div className="relative max-w-3xl mx-auto px-6 py-12">
+        {/* Header */}
+        <div className="text-center mb-10">
+          <div className="inline-flex items-center justify-center w-16 h-16 rounded-2xl bg-gradient-to-br from-purple-500 to-blue-600 mb-4 shadow-lg shadow-purple-500/30">
+            <svg className="w-8 h-8 text-white" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+              <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M15.232 5.232l3.536 3.536m-2.036-5.036a2.5 2.5 0 113.536 3.536L6.5 21.036H3v-3.572L16.732 3.732z" />
+            </svg>
+          </div>
+          <h1 className="text-4xl font-bold text-white mb-2">Submit New Ticket</h1>
+          <p className="text-slate-400">Create a ticket and track your request</p>
+        </div>
+
+        {/* Form Card */}
+        <div className="bg-[#151b2b]/80 backdrop-blur-xl border border-purple-500/20 rounded-3xl p-8 shadow-2xl shadow-purple-900/10">
+          <div className="space-y-5">
+
+            {/* Row 1: Name + Email */}
+            <div className="grid grid-cols-1 sm:grid-cols-2 gap-4">
+              <div>
+                <label htmlFor="name" className="block text-xs font-semibold text-slate-400 uppercase tracking-wider mb-1.5">
+                  Full Name <span className="text-red-400">*</span>
+                </label>
+                <div className="relative">
+                  <div className="absolute inset-y-0 left-0 pl-3.5 flex items-center pointer-events-none">
+                    <svg className="w-4 h-4 text-slate-500" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                      <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M16 7a4 4 0 11-8 0 4 4 0 018 0zM12 14a7 7 0 00-7 7h14a7 7 0 00-7-7z" />
+                    </svg>
+                  </div>
+                  <input
+                    id="name"
+                    type="text"
+                    placeholder="John Doe"
+                    value={form.name}
+                    onChange={handleChange}
+                    className="w-full pl-10 pr-4 py-3 bg-[#0f1420] border border-slate-700/50 rounded-xl text-white placeholder-slate-500 focus:outline-none focus:border-purple-500 focus:ring-2 focus:ring-purple-500/20 transition-all text-sm"
+                  />
+                </div>
+              </div>
+
+              <div>
+                <label htmlFor="email" className="block text-xs font-semibold text-slate-400 uppercase tracking-wider mb-1.5">
+                  Email Address <span className="text-red-400">*</span>
+                </label>
+                <div className="relative">
+                  <div className="absolute inset-y-0 left-0 pl-3.5 flex items-center pointer-events-none">
+                    <svg className="w-4 h-4 text-slate-500" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                      <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M3 8l7.89 5.26a2 2 0 002.22 0L21 8M5 19h14a2 2 0 002-2V7a2 2 0 00-2-2H5a2 2 0 00-2 2v10a2 2 0 002 2z" />
+                    </svg>
+                  </div>
+                  <input
+                    id="email"
+                    type="email"
+                    placeholder="john.doe@company.com"
+                    value={form.email}
+                    onChange={handleChange}
+                    className="w-full pl-10 pr-4 py-3 bg-[#0f1420] border border-slate-700/50 rounded-xl text-white placeholder-slate-500 focus:outline-none focus:border-purple-500 focus:ring-2 focus:ring-purple-500/20 transition-all text-sm"
+                  />
+                </div>
+              </div>
+            </div>
+
+            {/* Row 2: Application + Component */}
+            <div className="grid grid-cols-1 sm:grid-cols-2 gap-4">
+              <div>
+                <label className="block text-xs font-semibold text-slate-400 uppercase tracking-wider mb-1.5">
+                  Application <span className="text-slate-500 normal-case tracking-normal font-normal">(optional)</span>
+                </label>
+                <select
+                  id="app_name"
+                  value={form.app_name}
+                  onChange={handleChange}
+                  className="w-full px-4 py-3 bg-[#0f1420] border border-slate-700/50 rounded-xl text-white focus:outline-none focus:border-purple-500 focus:ring-2 focus:ring-purple-500/20 transition-all text-sm"
+                >
+                  <option value="">Select Application</option>
+                  {Object.keys(appComponents).map(app => (
+                    <option key={app} value={app}>{app}</option>
+                  ))}
+                </select>
+              </div>
+
+              <div>
+                <label className="block text-xs font-semibold text-slate-400 uppercase tracking-wider mb-1.5">
+                  Component <span className="text-slate-500 normal-case tracking-normal font-normal">(optional)</span>
+                </label>
+                <select
+                  id="component_name"
+                  value={form.component_name}
+                  onChange={handleChange}
+                  disabled={!form.app_name}
+                  className="w-full px-4 py-3 bg-[#0f1420] border border-slate-700/50 rounded-xl text-white disabled:opacity-40 disabled:cursor-not-allowed focus:outline-none focus:border-purple-500 focus:ring-2 focus:ring-purple-500/20 transition-all text-sm"
+                >
+                  <option value="">Select Component</option>
+                  {form.app_name &&
+                    appComponents[form.app_name]?.map(comp => (
+                      <option key={comp} value={comp}>{comp}</option>
+                    ))
+                  }
+                </select>
+              </div>
+            </div>
+
+            {/* Row 3: Urgency + Impact */}
+            <div className="grid grid-cols-1 sm:grid-cols-2 gap-4">
+              <div>
+                <label className="block text-xs font-semibold text-slate-400 uppercase tracking-wider mb-1.5">
+                  Urgency <span className="text-red-400">*</span>
+                </label>
+                <select
+                  id="urgency"
+                  value={form.urgency}
+                  onChange={handleChange}
+                  className="w-full px-4 py-3 bg-[#0f1420] border border-slate-700/50 rounded-xl text-white focus:outline-none focus:border-purple-500 focus:ring-2 focus:ring-purple-500/20 transition-all text-sm"
+                >
+                  <option value="">Select Urgency</option>
+                  {urgencyOptions.map(item => (
+                    <option key={item} value={item}>{item}</option>
+                  ))}
+                </select>
+              </div>
+
+              <div>
+                <label className="block text-xs font-semibold text-slate-400 uppercase tracking-wider mb-1.5">
+                  Impact <span className="text-red-400">*</span>
+                </label>
+                <select
+                  id="impact"
+                  value={form.impact}
+                  onChange={handleChange}
+                  className="w-full px-4 py-3 bg-[#0f1420] border border-slate-700/50 rounded-xl text-white focus:outline-none focus:border-purple-500 focus:ring-2 focus:ring-purple-500/20 transition-all text-sm"
+                >
+                  <option value="">Select Impact</option>
+                  {impactOptions.map(item => (
+                    <option key={item} value={item}>{item}</option>
+                  ))}
+                </select>
+              </div>
+            </div>
+
+            {/* Summary Field */}
+            <div>
+              <label htmlFor="summary" className="block text-xs font-semibold text-slate-400 uppercase tracking-wider mb-1.5">
+                Issue Summary <span className="text-red-400">*</span>
+              </label>
+              <div className="relative">
+                <div className="absolute inset-y-0 left-0 pl-3.5 flex items-center pointer-events-none">
+                  <svg className="w-4 h-4 text-slate-500" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                    <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M7 8h10M7 12h4m1 8l-4-4H5a2 2 0 01-2-2V6a2 2 0 012-2h14a2 2 0 012 2v8a2 2 0 01-2 2h-3l-4 4z" />
+                  </svg>
+                </div>
+                <input
+                  id="summary"
+                  type="text"
+                  placeholder="Brief description of the issue"
+                  value={form.summary}
+                  onChange={handleChange}
+                  className="w-full pl-10 pr-4 py-3 bg-[#0f1420] border border-slate-700/50 rounded-xl text-white placeholder-slate-500 focus:outline-none focus:border-purple-500 focus:ring-2 focus:ring-purple-500/20 transition-all text-sm"
+                />
+              </div>
+            </div>
+
+            {/* Description Field */}
+            <div>
+              <label htmlFor="description" className="block text-xs font-semibold text-slate-400 uppercase tracking-wider mb-1.5">
+                Detailed Description <span className="text-red-400">*</span>
+              </label>
+              <textarea
+                id="description"
+                rows="4"
+                placeholder="Steps to reproduce, expected behavior, relevant context..."
+                value={form.description}
+                onChange={handleChange}
+                className="w-full px-4 py-3 bg-[#0f1420] border border-slate-700/50 rounded-xl text-white placeholder-slate-500 focus:outline-none focus:border-purple-500 focus:ring-2 focus:ring-purple-500/20 transition-all resize-none text-sm"
+              />
+            </div>
+
+            {/* Result Messages */}
+            {result && (
+              <div className={`flex items-start gap-3 p-4 rounded-xl border ${result.ok
+                ? 'bg-green-500/10 border-green-500/20'
+                : 'bg-red-500/10 border-red-500/20'
+                } animate-slide-down`}>
+                <div className={`w-10 h-10 rounded-lg flex items-center justify-center flex-shrink-0 ${result.ok ? 'bg-green-500/20' : 'bg-red-500/20'
+                  }`}>
+                  {result.ok ? (
+                    <svg className="w-6 h-6 text-green-400" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                      <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M9 12l2 2 4-4m6 2a9 9 0 11-18 0 9 9 0 0118 0z" />
+                    </svg>
+                  ) : (
+                    <svg className="w-6 h-6 text-red-400" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                      <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M12 8v4m0 4h.01M21 12a9 9 0 11-18 0 9 9 0 0118 0z" />
+                    </svg>
+                  )}
+                </div>
+                <div className="flex-1">
+                  <h3 className={`font-semibold mb-1 ${result.ok ? 'text-green-400' : 'text-red-400'}`}>
+                    {result.ok ? 'Ticket Submitted Successfully!' : 'Submission Failed'}
+                  </h3>
+                  <p className={`text-sm ${result.ok ? 'text-green-300' : 'text-red-300'}`}>
+                    {result.ok
+                      ? `Your ticket has been created with ID: ${result.id}. We'll get back to you soon!`
+                      : result.msg || 'An error occurred while submitting your ticket. Please try again.'}
+                  </p>
+                </div>
+              </div>
+            )}
+
+            {/* Similar Search */}
+
+            <button
+              onClick={handlePreSearch}
+              disabled={
+                searching ||
+                !form.summary ||
+                !form.description
+              }
+              className="
+  w-full
+  mb-4
+  bg-[#1c2338]
+  border
+  border-blue-500/20
+  hover:border-blue-400
+  text-blue-300
+  py-4
+  rounded-xl
+  font-semibold
+  transition-all
+  "
+            >
+
+              {searching ? (
+
+                <span className="flex justify-center items-center gap-2">
+
+                  <svg
+                    className="w-5 h-5 animate-spin"
+                    fill="none"
+                    stroke="currentColor"
+                    viewBox="0 0 24 24"
+                  >
+                    <path
+                      strokeLinecap="round"
+                      strokeLinejoin="round"
+                      strokeWidth={2}
+                      d="M4 4v5h.582m15.356 2A8.001 8.001 0 004.582 9m0 0H9m11 11v-5h-.581m0 0a8.003 8.003 0 01-15.357-2m15.357 2H15"
+                    />
+                  </svg>
+
+                  Searching Similar Tickets...
+
+                </span>
+
+              ) : (
+
+                "Search Similar Resolved Tickets"
+
+              )}
+
+            </button>
+
+            {/* Submit Button */}
+            <button
+              onClick={handleSubmit}
+              disabled={
+                loading ||
+                !form.name ||
+                !form.email ||
+                !form.summary ||
+                !form.description ||
+                !form.urgency ||
+                !form.impact ||
+                appComponentMismatch
+              }
+              className="w-full bg-gradient-to-r from-purple-500 to-blue-600 hover:from-purple-600 hover:to-blue-700 disabled:from-slate-600 disabled:to-slate-700 disabled:cursor-not-allowed text-white font-semibold py-4 rounded-xl shadow-lg shadow-purple-500/25 hover:shadow-purple-500/40 disabled:shadow-none transition-all duration-200 transform hover:scale-[1.02] active:scale-[0.98] disabled:transform-none"
+            >
+              {loading ? (
+                <span className="flex items-center justify-center gap-2">
+                  <svg className="w-5 h-5 animate-spin" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                    <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M4 4v5h.582m15.356 2A8.001 8.001 0 004.582 9m0 0H9m11 11v-5h-.581m0 0a8.003 8.003 0 01-15.357-2m15.357 2H15" />
+                  </svg>
+                  Submitting Ticket...
+                </span>
+              ) : (
+                <span className="flex items-center justify-center gap-2">
+                  <svg className="w-5 h-5" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                    <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M12 19l9 2-9-18-9 18 9-2zm0 0v-8" />
+                  </svg>
+                  Submit Ticket
+                </span>
+              )}
+            </button>
+          </div>
+        </div>
+
+        {/* Info Cards */}
+        <div className="grid grid-cols-1 md:grid-cols-3 gap-4 mt-8">
+          <div className="bg-[#151b2b]/50 backdrop-blur-xl border border-purple-500/10 rounded-xl p-5 text-center">
+            <div className="w-12 h-12 rounded-xl bg-purple-500/10 flex items-center justify-center mx-auto mb-3">
+              <svg className="w-6 h-6 text-purple-400" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M13 10V3L4 14h7v7l9-11h-7z" />
+              </svg>
+            </div>
+            <h3 className="font-semibold text-white mb-1">Fast Response</h3>
+            <p className="text-xs text-slate-400">Average response time under 24 hours</p>
+          </div>
+
+          <div className="bg-[#151b2b]/50 backdrop-blur-xl border border-purple-500/10 rounded-xl p-5 text-center">
+            <div className="w-12 h-12 rounded-xl bg-blue-500/10 flex items-center justify-center mx-auto mb-3">
+              <svg className="w-6 h-6 text-blue-400" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M9 12l2 2 4-4m5.618-4.016A11.955 11.955 0 0112 2.944a11.955 11.955 0 01-8.618 3.04A12.02 12.02 0 003 9c0 5.591 3.824 10.29 9 11.622 5.176-1.332 9-6.03 9-11.622 0-1.042-.133-2.052-.382-3.016z" />
+              </svg>
+            </div>
+            <h3 className="font-semibold text-white mb-1">Secure & Private</h3>
+            <p className="text-xs text-slate-400">Your data is secured and protected</p>
+          </div>
+
+          <div className="bg-[#151b2b]/50 backdrop-blur-xl border border-purple-500/10 rounded-xl p-5 text-center">
+            <div className="w-12 h-12 rounded-xl bg-green-500/10 flex items-center justify-center mx-auto mb-3">
+              <svg className="w-6 h-6 text-green-400" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M9 19v-6a2 2 0 00-2-2H5a2 2 0 00-2 2v6a2 2 0 002 2h2a2 2 0 002-2zm0 0V9a2 2 0 012-2h2a2 2 0 012 2v10m-6 0a2 2 0 002 2h2a2 2 0 002-2m0 0V5a2 2 0 012-2h2a2 2 0 012 2v14a2 2 0 01-2 2h-2a2 2 0 01-2-2z" />
+              </svg>
+            </div>
+            <h3 className="font-semibold text-white mb-1">Track Progress</h3>
+            <p className="text-xs text-slate-400">Monitor your ticket status in real-time</p>
+          </div>
+        </div>
+      </div>
+
+      {showPopup && (
+        <PreSearchTicketCard
+          ticket={similarTicket}
+          onClose={() => {
+            setShowPopup(false);
+            setSimilarTicket(null);
+            setSearchMessage("");
+          }}
+          searchMessage={searchMessage}   // optional (we’ll improve card below)
+        />
+      )}
+
+
+      <style jsx>{`
+        @keyframes slide-down {
+          from { opacity: 0; transform: translateY(-10px); }
+          to { opacity: 1; transform: translateY(0); }
+        }
+        .animate-slide-down {
+          animation: slide-down 0.3s ease-out;
+        }
+      `}</style>
+    </div>
+  );
+}
