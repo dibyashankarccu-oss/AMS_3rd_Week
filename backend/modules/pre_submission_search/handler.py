@@ -1,6 +1,6 @@
 from services.embedding_service import get_embedding
 
-from repositories.ticket_repository import search_completed_tickets
+from repositories.ticket_repository import search_completed_tickets_with_rca, search_completed_tickets_with_rca
 
 from .agent import rerank_tickets
 
@@ -34,7 +34,7 @@ async def search_similar_completed_tickets(
     embedding = [float(x) for x in embedding]
 
     # PASS FILTERS HERE (SQL-level filtering)
-    candidates = await search_completed_tickets(
+    candidates = await search_completed_tickets_with_rca(
         embedding,
         top_k=5,
         app_name=app_name,

@@ -1,0 +1,124 @@
+-- =========================================
+-- 2. COMPONENTS TABLE
+-- =========================================
+
+CREATE TABLE ams_components (
+    id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
+
+    app_id UUID NOT NULL
+        REFERENCES ams_apps(id)
+        ON DELETE CASCADE,
+
+    component_code TEXT UNIQUE NOT NULL,
+    component_name TEXT NOT NULL,
+
+    created_at TIMESTAMPTZ DEFAULT NOW()
+);
+
+-- =========================================
+-- INSERT INTO COMPONENTS
+-- =========================================
+
+INSERT INTO ams_components
+(
+    app_id,
+    component_code,
+    component_name
+)
+
+VALUES
+
+-- AMS001 Components
+(
+    (SELECT id FROM ams_apps WHERE app_code = 'AMS001'),
+    'CMP001',
+    'Ticket Intake API'
+),
+
+(
+    (SELECT id FROM ams_apps WHERE app_code = 'AMS001'),
+    'CMP002',
+    'Incident Prioritization Engine'
+),
+
+(
+    (SELECT id FROM ams_apps WHERE app_code = 'AMS001'),
+    'CMP003',
+    'Operations Dashboard'
+),
+
+-- AMS002 Components
+(
+    (SELECT id FROM ams_apps WHERE app_code = 'AMS002'),
+    'CMP004',
+    'Request Submission Service'
+),
+
+(
+    (SELECT id FROM ams_apps WHERE app_code = 'AMS002'),
+    'CMP005',
+    'Approval Workflow Engine'
+),
+
+(
+    (SELECT id FROM ams_apps WHERE app_code = 'AMS002'),
+    'CMP006',
+    'Customer Support UI'
+),
+
+-- AMS003 Components
+(
+    (SELECT id FROM ams_apps WHERE app_code = 'AMS003'),
+    'CMP007',
+    'Log Aggregation Service'
+),
+
+(
+    (SELECT id FROM ams_apps WHERE app_code = 'AMS003'),
+    'CMP008',
+    'Alert Correlation Engine'
+),
+
+(
+    (SELECT id FROM ams_apps WHERE app_code = 'AMS003'),
+    'CMP009',
+    'Monitoring Dashboard'
+),
+
+-- AMS004 Components
+(
+    (SELECT id FROM ams_apps WHERE app_code = 'AMS004'),
+    'CMP010',
+    'Release Scheduler'
+),
+
+(
+    (SELECT id FROM ams_apps WHERE app_code = 'AMS004'),
+    'CMP011',
+    'Deployment Validation Engine'
+),
+
+(
+    (SELECT id FROM ams_apps WHERE app_code = 'AMS004'),
+    'CMP012',
+    'Release Tracking Portal'
+),
+
+-- AMS005 Components
+(
+    (SELECT id FROM ams_apps WHERE app_code = 'AMS005'),
+    'CMP013',
+    'Health Data Collector'
+),
+
+(
+    (SELECT id FROM ams_apps WHERE app_code = 'AMS005'),
+    'CMP014',
+    'Root Cause Detection Agent'
+),
+
+(
+    (SELECT id FROM ams_apps WHERE app_code = 'AMS005'),
+    'CMP015',
+    'Application Health Dashboard'
+);

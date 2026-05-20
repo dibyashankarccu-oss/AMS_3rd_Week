@@ -297,4 +297,3 @@ async def merge_tickets(
             "message": str(e)
         }   
 
-

@@ -70,4 +70,3 @@ export const auth = {
     return !!localStorage.getItem("ams_user");
   }
 };
-

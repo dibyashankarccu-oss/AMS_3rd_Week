@@ -1,4 +1,4 @@
-import { useState, useEffect } from "react";
+import { useState } from "react";
 import { apiRequest } from "../api/apiClient";
 import PreSearchTicketCard from "../components/PreSearchTicketCard";
 
@@ -11,10 +11,8 @@ export default function SubmitPage() {
     description: "",
 
     app_name: "",
-    app_code: "",
 
     component_name: "",
-    component_code: "",
 
     urgency: "",
     impact: ""
@@ -30,21 +28,68 @@ export default function SubmitPage() {
 
   const [searchMessage, setSearchMessage] = useState("");
 
-  const [appsData, setAppsData] = useState([]);
+  const appComponents = {
 
-  useEffect(() => {
-    async function fetchApps() {
-      try {
-        const res = await apiRequest("/apps-with-components", "GET");
-        setAppsData(res?.data || []);
-      } catch (err) {
-        console.error("Failed to load apps", err);
-      }
-    }
+    "Enterprise Incident Management System": [
+      "Ticket Intake API",
+      "Incident Prioritization Engine",
+      "Operations Dashboard"
+    ],
 
-    fetchApps();
-  }, []);
+    "Customer Service Request Portal": [
+      "Request Submission Service",
+      "Approval Workflow Engine",
+      "Customer Support UI"
+    ],
 
+    "Production Monitoring Hub": [
+      "Log Aggregation Service",
+      "Alert Correlation Engine",
+      "Monitoring Dashboard"
+    ],
+
+    "Change & Release Management System": [
+      "Release Scheduler",
+      "Deployment Validation Engine",
+      "Release Tracking Portal"
+    ],
+
+    "Application Health Intelligence Platform": [
+      "Health Data Collector",
+      "Root Cause Detection Agent",
+      "Application Health Dashboard"
+    ]
+  };
+
+  const appMap = {
+    "Enterprise Incident Management System": "AMS001",
+    "Customer Service Request Portal": "AMS002",
+    "Production Monitoring Hub": "AMS003",
+    "Change & Release Management System": "AMS004",
+    "Application Health Intelligence Platform": "AMS005"
+  };
+
+  const componentMap = {
+    "Ticket Intake API": "CMP001",
+    "Incident Prioritization Engine": "CMP002",
+    "Operations Dashboard": "CMP003",
+
+    "Request Submission Service": "CMP004",
+    "Approval Workflow Engine": "CMP005",
+    "Customer Support UI": "CMP006",
+
+    "Log Aggregation Service": "CMP007",
+    "Alert Correlation Engine": "CMP008",
+    "Monitoring Dashboard": "CMP009",
+
+    "Release Scheduler": "CMP010",
+    "Deployment Validation Engine": "CMP011",
+    "Release Tracking Portal": "CMP012",
+
+    "Health Data Collector": "CMP013",
+    "Root Cause Detection Agent": "CMP014",
+    "Application Health Dashboard": "CMP015"
+  };
 
 
   const urgencyOptions = [
@@ -73,18 +118,14 @@ export default function SubmitPage() {
 
       // WHEN APP CHANGES → AUTO SET APP ID + RESET COMPONENT
       if (id === "app_name") {
-        updated.app_code = appsData.find(a => a.app_name === value)?.app_code || "";
+        updated.app_code = appMap[value] || "";
         updated.component_name = "";
         updated.component_code = "";
       }
 
-      // WHEN COMPONENT CHANGES → AUTO SET COMPONENT CODE
+      // WHEN COMPONENT CHANGES → AUTO SET COMPONENT ID
       if (id === "component_name") {
-        updated.component_code =
-          appsData
-            .find(a => a.app_name === prev.app_name)
-            ?.components.find(c => c.component_name === value)
-            ?.component_code || "";
+        updated.component_code = componentMap[value] || "";
       }
 
       return updated;
@@ -148,29 +189,13 @@ export default function SubmitPage() {
     setResult(null);
 
     // default values when both empty
-    const selectedApp = appsData.find(
-      a => a.app_name === form.app_name
-    );
-
-    const selectedComponent =
-      selectedApp?.components?.find(
-        c => c.component_name === form.component_name
-      );
-
     const payload = {
       ...form,
-
       app_name: form.app_name || "General",
-      app_code: selectedApp?.app_code || null,
-
+      app_code: appMap[form.app_name] || null,
       component_name: form.component_name || "General",
-      component_code: selectedComponent?.component_code || null,
-
-      urgency: form.urgency,
-      impact: form.impact
+      component_code: componentMap[form.component_name] || null,
     };
-
-
     let finished = false;
 
     // safety timeout
@@ -324,56 +349,53 @@ export default function SubmitPage() {
                 <label className="block text-xs font-semibold text-slate-400 uppercase tracking-wider mb-1.5">
                   Application
                 </label>
-                <select
-                  id="app_name"
-                  value={form.app_name}
-                  onChange={handleChange}
-                  className="w-full px-4 py-3 bg-[#0f1420] border border-slate-700/50 rounded-xl text-white focus:outline-none focus:border-purple-500 focus:ring-2 focus:ring-purple-500/20 transition-all text-sm"
-                >
-                  <option value="">Select Application</option>
-                  {appsData.map(app => (
-                    <option key={app.app_code} value={app.app_name}>
-                      {app.app_name}
-                    </option>
-                  ))}
-                </select>
-                {form.app_code && (
+                <div className="flex items-center gap-2">
+                  <select
+                    id="app_name"
+                    value={form.app_name}
+                    onChange={handleChange}
+                    className="flex-1 px-4 py-3 bg-[#0f1420] border border-slate-700/50 rounded-xl text-white focus:outline-none focus:border-purple-500 focus:ring-2 focus:ring-purple-500/20 transition-all text-sm"
+                  >
+                    <option value="">Select Application</option>
+                    {Object.keys(appComponents).map(app => (
+                      <option key={app} value={app}>{app}</option>
+                    ))}
+                  </select>
                   <span
                     title="Application ID (auto-filled)"
-                    className="inline-block mt-1.5 px-2.5 py-1 rounded-lg border border-purple-500/30 bg-[#0a0e1a] text-xs font-mono font-semibold tracking-wide select-none cursor-default text-purple-400"
+                    className="shrink-0 px-2.5 py-1.5 rounded-lg border border-slate-700/50 bg-[#0a0e1a] text-xs font-mono font-semibold tracking-wide select-none cursor-default"
+                    style={{ color: form.app_code ? '#a78bfa' : '#475569' }}
                   >
-                    {form.app_code}
+                    {form.app_code || 'null'}
                   </span>
-                )}
+                </div>
               </div>
 
               <div>
                 <label className="block text-xs font-semibold text-slate-400 uppercase tracking-wider mb-1.5">
                   Component
                 </label>
-                <select
-                  id="component_name"
-                  value={form.component_name}
-                  onChange={handleChange}
-                  disabled={!form.app_name}
-                  className="w-full px-4 py-3 bg-[#0f1420] border border-slate-700/50 rounded-xl text-white focus:outline-none focus:border-purple-500 focus:ring-2 focus:ring-purple-500/20 transition-all text-sm disabled:opacity-50"
-                >
-                  <option value="">Select Component</option>
-                  {(appsData.find(a => a.app_name === form.app_name)?.components || [])
-                    .map(comp => (
-                      <option key={comp.component_code} value={comp.component_name}>
-                        {comp.component_name}
-                      </option>
+                <div className="flex items-center gap-2">
+                  <select
+                    id="component_name"
+                    value={form.component_name}
+                    onChange={handleChange}
+                    disabled={!form.app_name}
+                    className="flex-1 px-4 py-3 bg-[#0f1420] border border-slate-700/50 rounded-xl text-white focus:outline-none focus:border-purple-500 focus:ring-2 focus:ring-purple-500/20 transition-all text-sm disabled:opacity-50"
+                  >
+                    <option value="">Select Component</option>
+                    {(appComponents[form.app_name] || []).map(comp => (
+                      <option key={comp} value={comp}>{comp}</option>
                     ))}
-                </select>
-                {form.component_code && (
+                  </select>
                   <span
                     title="Component ID (auto-filled)"
-                    className="inline-block mt-1.5 px-2.5 py-1 rounded-lg border border-blue-500/30 bg-[#0a0e1a] text-xs font-mono font-semibold tracking-wide select-none cursor-default text-blue-400"
+                    className="shrink-0 px-2.5 py-1.5 rounded-lg border border-slate-700/50 bg-[#0a0e1a] text-xs font-mono font-semibold tracking-wide select-none cursor-default"
+                    style={{ color: form.component_code ? '#60a5fa' : '#475569' }}
                   >
-                    {form.component_code}
+                    {form.component_code || 'null'}
                   </span>
-                )}
+                </div>
               </div>
             </div>
 

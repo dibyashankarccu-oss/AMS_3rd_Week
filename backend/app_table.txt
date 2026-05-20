@@ -1,0 +1,49 @@
+-- =========================================
+-- 1. APPLICATIONS TABLE
+-- =========================================
+
+CREATE TABLE ams_apps (
+    id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
+
+    app_code TEXT UNIQUE NOT NULL,
+    app_name TEXT NOT NULL,
+
+    created_at TIMESTAMPTZ DEFAULT NOW()
+);
+
+-- =========================================
+-- INSERT INTO APPLICATIONS
+-- =========================================
+
+INSERT INTO ams_apps
+(
+    app_code,
+    app_name
+)
+
+VALUES
+
+(
+    'AMS001',
+    'Enterprise Incident Management System'
+),
+
+(
+    'AMS002',
+    'Customer Service Request Portal'
+),
+
+(
+    'AMS003',
+    'Production Monitoring Hub'
+),
+
+(
+    'AMS004',
+    'Change & Release Management System'
+),
+
+(
+    'AMS005',
+    'Application Health Intelligence Platform'
+);

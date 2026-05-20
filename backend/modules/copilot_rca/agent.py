@@ -25,24 +25,14 @@ if not GROQ_API_KEY:
 llm = ChatGroq(api_key=GROQ_API_KEY, model_name=MODEL_NAME)
 
 
-# ─────────────────────────────────────────────
-# CLEAN LLM OUTPUT
-# ─────────────────────────────────────────────
-def _clean_llm_output(raw: str) -> str:
+def _clean(raw: str) -> str:
     raw = raw.strip()
     raw = re.sub(r"^```(?:json)?", "", raw).strip()
     raw = re.sub(r"```$",          "", raw).strip()
     return raw
 
 
-# ─────────────────────────────────────────────
-# IS SAME ISSUE (past ticket comparison)
-# ─────────────────────────────────────────────
 def is_same_issue(current: dict, past: dict) -> tuple[bool, str]:
-    """
-    LLM decides if current incident is the same type as a past resolved ticket.
-    Returns (is_same: bool, confidence: str)
-    """
     prompt = SAME_ISSUE_PROMPT.format(
         summary          = current.get("summary", ""),
         description      = current.get("description", ""),
@@ -51,85 +41,46 @@ def is_same_issue(current: dict, past: dict) -> tuple[bool, str]:
         past_root_cause  = past.get("rca_root_cause", ""),
         past_affected    = past.get("rca_affected", ""),
     )
-
     try:
-        response = llm.invoke(prompt)
-        raw      = _clean_llm_output(response.content)
-        result   = json.loads(raw)
-
-        same       = bool(result.get("is_same_issue", False))
-        confidence = str(result.get("confidence", "LOW")).upper()
-        reason     = result.get("reason", "")
-
-        print(f"[RCAAgent] Same issue check: {same} | Confidence: {confidence} | Reason: {reason}")
-        return same, confidence
-
+        result = json.loads(_clean(llm.invoke(prompt).content))
+        same   = bool(result.get("is_same_issue", False))
+        conf   = str(result.get("confidence", "LOW")).upper()
+        print(f"[RCAAgent] Same issue: {same} | {conf} | {result.get('reason','')}")
+        return same, conf
     except Exception as e:
         print(f"[RCAAgent] is_same_issue failed: {e}")
         return False, "LOW"
 
 
-# ─────────────────────────────────────────────
-# IS KB APPLICABLE (knowledge base match)
-# ─────────────────────────────────────────────
 def is_kb_applicable(current: dict, kb_entry: dict) -> tuple[bool, str]:
-    """
-    LLM verifies if a KB entry is truly applicable to the current incident.
-    Returns (is_applicable: bool, confidence: str)
-    """
     prompt = KB_MATCH_PROMPT.format(
-        summary      = current.get("summary", ""),
-        description  = current.get("description", ""),
-        kb_title     = kb_entry.get("title", ""),
-        kb_symptoms  = kb_entry.get("symptoms", ""),
-        kb_root_cause= kb_entry.get("root_cause", ""),
-        kb_affected  = kb_entry.get("affected_component", ""),
+        summary       = current.get("summary", ""),
+        description   = current.get("description", ""),
+        kb_title      = kb_entry.get("title", ""),
+        kb_symptoms   = kb_entry.get("symptoms", ""),
+        kb_root_cause = kb_entry.get("root_cause", ""),
+        kb_affected   = kb_entry.get("affected_component", ""),
     )
-
     try:
-        response = llm.invoke(prompt)
-        raw      = _clean_llm_output(response.content)
-        result   = json.loads(raw)
-
+        result     = json.loads(_clean(llm.invoke(prompt).content))
         applicable = bool(result.get("is_applicable", False))
-        confidence = str(result.get("confidence", "LOW")).upper()
-        reason     = result.get("reason", "")
-
-        print(f"[RCAAgent] KB match check: {applicable} | Confidence: {confidence} | Reason: {reason}")
-        return applicable, confidence
-
+        conf       = str(result.get("confidence", "LOW")).upper()
+        print(f"[RCAAgent] KB applicable: {applicable} | {conf} | {result.get('reason','')}")
+        return applicable, conf
     except Exception as e:
         print(f"[RCAAgent] is_kb_applicable failed: {e}")
         return False, "LOW"
 
 
-# ─────────────────────────────────────────────
-# GENERATE CLARIFICATION QUESTIONS (HITL)
-# ─────────────────────────────────────────────
 def generate_clarification_questions(current: dict) -> dict:
-    """
-    When confidence is LOW, generate diagnostic questions to ask the submitter.
-    Returns {questions: [...], hint: str}
-    """
     prompt = HITL_CLARIFICATION_PROMPT.format(
         summary     = current.get("summary", ""),
         description = current.get("description", ""),
     )
-
     try:
-        response = llm.invoke(prompt)
-        raw      = _clean_llm_output(response.content)
-        result   = json.loads(raw)
-
-        questions = result.get("questions", [])
-        hint      = result.get("hint", "")
-
-        print(f"[RCAAgent] Generated {len(questions)} HITL clarification questions")
-        return {
-            "questions": questions,
-            "hint":      hint,
-        }
-
+        result = json.loads(_clean(llm.invoke(prompt).content))
+        print(f"[RCAAgent] Generated {len(result.get('questions', []))} HITL questions")
+        return {"questions": result.get("questions", []), "hint": result.get("hint", "")}
     except Exception as e:
         print(f"[RCAAgent] generate_clarification_questions failed: {e}")
         return {
@@ -137,76 +88,70 @@ def generate_clarification_questions(current: dict) -> dict:
                 "What exact error message or error code are you seeing?",
                 "When did this issue first occur and did anything change before it started?",
                 "Which specific systems or services are affected?",
-                "Have you tried any troubleshooting steps already? If so, what were the results?",
+                "Have you tried any troubleshooting steps? If so, what were the results?",
             ],
-            "hint": "Error messages and timeline are the most critical details needed.",
+            "hint": "Error messages and timeline are most critical for diagnosis.",
         }
 
 
-# ─────────────────────────────────────────────
-# GENERATE FRESH RCA
-# ─────────────────────────────────────────────
 def generate_fresh_rca(current: dict) -> dict:
     """
-    LLM generates a detailed, point-by-point RCA when no KB match or past
-    ticket match exists. Includes HITL flag if confidence is LOW.
+    Two-layer RCA: technical_cause + systemic_cause.
+    Combines into root_cause string with section headers for
+    storage in Supabase and display in Jira / frontend.
+    No resolution_steps — handled by SOP module.
     """
     prompt = GENERATE_PROMPT.format(
         summary     = current.get("summary", ""),
         description = current.get("description", ""),
     )
-
     try:
-        response = llm.invoke(prompt)
-        raw      = _clean_llm_output(response.content)
-        result   = json.loads(raw)
+        result = json.loads(_clean(llm.invoke(prompt).content))
 
-        required = ("root_cause", "affected_component", "resolution_steps", "confidence")
+        required = ("technical_cause", "systemic_cause", "affected_component", "confidence")
         if not all(k in result for k in required):
-            raise ValueError("Missing required keys in LLM response")
+            raise ValueError(f"Missing required keys. Got: {list(result.keys())}")
 
         confidence = str(result["confidence"]).upper().strip()
         if confidence not in ("HIGH", "MEDIUM", "LOW"):
             confidence = "LOW"
 
-        resolution_steps = result["resolution_steps"]
-        if not isinstance(resolution_steps, list) or not resolution_steps:
-            resolution_steps = ["Manual review required — LLM returned no resolution steps."]
+        technical = str(result["technical_cause"]).strip()
+        systemic  = str(result["systemic_cause"]).strip()
 
-        # ── HITL: if LOW confidence, generate clarification questions ──
+        root_cause = (
+            f"TECHNICAL CAUSE:\n{technical}\n\n"
+            f"SYSTEMIC CAUSE:\n{systemic}"
+        )
+
         needs_human_review = result.get("needs_human_review", confidence == "LOW")
-        clarification      = None
-
-        if needs_human_review:
-            print(f"[RCAAgent] LOW confidence — triggering HITL clarification questions")
-            clarification = generate_clarification_questions(current)
+        clarification      = generate_clarification_questions(current) if needs_human_review else None
 
         return {
-            "status":              "success",
-            "root_cause":          str(result["root_cause"]).strip(),
-            "affected_component":  str(result["affected_component"]).strip(),
-            "resolution_steps":    resolution_steps,
-            "confidence":          confidence,
-            "needs_human_review":  needs_human_review,
-            "clarification":       clarification,
+            "status":             "success",
+            "root_cause":         root_cause,
+            "technical_cause":    technical,
+            "systemic_cause":     systemic,
+            "affected_component": str(result["affected_component"]).strip(),
+            "confidence":         confidence,
+            "needs_human_review": needs_human_review,
+            "clarification":      clarification,
         }
 
     except Exception as e:
         print(f"[RCAAgent] generate_fresh_rca failed: {e}")
-
-        # Even on failure, try to generate HITL questions
         clarification = None
         try:
             clarification = generate_clarification_questions(current)
         except Exception:
             pass
-
         return {
-            "status":              "error",
-            "root_cause":          f"RCA generation failed: {str(e)[:80]}. Manual review required.",
-            "affected_component":  "Unknown — please provide more details",
-            "resolution_steps":    ["Provide a detailed incident description and resubmit for RCA."],
-            "confidence":          "LOW",
-            "needs_human_review":  True,
-            "clarification":       clarification,
+            "status":             "error",
+            "root_cause":         f"RCA generation failed: {str(e)[:80]}. Manual review required.",
+            "technical_cause":    "",
+            "systemic_cause":     "",
+            "affected_component": "Unknown — please provide more details",
+            "confidence":         "LOW",
+            "needs_human_review": True,
+            "clarification":      clarification,
         }

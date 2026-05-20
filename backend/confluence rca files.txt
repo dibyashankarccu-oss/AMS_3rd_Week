@@ -1,0 +1,224 @@
+AMS001 — Enterprise Incident Management System
+App page title: AMS001 - Enterprise Incident Management System (empty body)
+Component 1: CMP001 - Ticket Intake API (empty body)
+RCA sub-page title: RCA - Ticket Intake API
+Label: rca-kb
+## Keywords
+ticket submission failure, API timeout, POST /submit error, 500 error, ticket not created, intake API down, request timeout, submission rejected
+
+## Symptoms
+Users attempting to submit tickets receive a 500 Internal Server Error or timeout. No new ticket appears in Jira or Supabase. Backend logs show the POST /submit endpoint failing before reaching the orchestrator. Other API endpoints remain functional.
+
+## Root Cause
+TECHNICAL CAUSE:
+The Ticket Intake API's POST /submit endpoint is failing due to a connection timeout between the FastAPI application server and the Supabase insert operation. The ticket_repository.insert_ticket() function is attempting to write to the tickets table but the Supabase client is not receiving an acknowledgement within the configured 10-second timeout window, likely because the pgvector embedding generation via sentence-transformers is blocking the async event loop before the DB write completes. The asyncio event loop is being saturated by the synchronous SentenceTransformer.encode() call, causing the request handler to stall.
+
+SYSTEMIC CAUSE:
+The sentence-transformers embedding model is loaded and called synchronously within an async FastAPI route handler, blocking the event loop and degrading throughput under concurrent ticket submissions. This architectural weakness was introduced when the embedding service was added without wrapping the synchronous model.encode() call in asyncio.run_in_executor(). No load test was performed after the embedding service was integrated, so the blocking behaviour was never detected before reaching production. A problem management task should be created to refactor embedding calls to use executor-based async execution and to add a concurrent submission load test to the CI pipeline.
+
+## Affected Component
+FastAPI POST /submit — Ticket Intake API (embedding_service.py → SentenceTransformer.encode)
+
+## Confidence
+HIGH
+Component 3: CMP003 - Operations Dashboard (empty body)
+RCA sub-page title: RCA - Operations Dashboard
+Label: rca-kb
+## Keywords
+dashboard not loading, blank screen, tickets not displaying, UI error, 401 unauthorized, session expired, authentication failure, dashboard blank, CORS error
+
+## Symptoms
+The Operations Dashboard loads but shows no tickets or displays a blank white screen. Browser console shows 401 Unauthorized or CORS errors on API calls. Other users on fresh sessions can access the dashboard normally. The issue started after a period of inactivity or after a system restart.
+
+## Root Cause
+TECHNICAL CAUSE:
+The Operations Dashboard is failing to load ticket data because the Supabase authentication session token stored in the browser has expired and the frontend is not handling the 401 response from the API. The useTickets hook calls GET /api/tickets but the auth middleware rejects the stale token, returning a 401. The frontend catches this as a generic error and renders an empty state without redirecting the user to re-authenticate. The root cause is a missing token refresh handler in the auth.js module combined with an absent 401 interceptor in apiClient.js.
+
+SYSTEMIC CAUSE:
+The authentication token lifecycle was not accounted for in the frontend API client design. There is no automatic token refresh logic or 401 interceptor in apiClient.js, meaning any session expiry produces a silent empty-state failure rather than a re-authentication prompt. This represents a knowledge gap in the frontend session management implementation — the team was aware of token expiry but no task was created to implement refresh handling before the dashboard went live. A problem management task should be created to implement a 401 interceptor in apiClient.js that automatically attempts a token refresh and retries the failed request, with a fallback redirect to the login page.
+
+## Affected Component
+Operations Dashboard — apiClient.js (Auth Token Expiry / 401 Handler Missing)
+
+## Confidence
+HIGH
+
+AMS002 — Customer Service Request Portal
+App page title: AMS002 - Customer Service Request Portal (empty body)
+Component 1: CMP004 - Request Submission Service (empty body)
+RCA sub-page title: RCA - Request Submission Service
+Label: rca-kb
+## Keywords
+service request not submitted, form submission failed, request dropped, submission error, customer portal down, request not created in Jira, form hangs on submit
+
+## Symptoms
+Customers submitting service requests via the portal see the submit button spin indefinitely or receive a generic error message. No ticket is created in Jira. Backend logs show the Jira Service Management API returning 403 or 422. The issue affects all customers or a specific request type.
+
+## Root Cause
+TECHNICAL CAUSE:
+The Request Submission Service is failing to create tickets in Jira Service Management because the REQUEST_TYPE_ID configured in the environment variable does not match a valid request type for the configured SERVICE_DESK_ID. The Jira API returns a 422 Unprocessable Entity with the message "Field 'requestTypeId' is invalid" when the servicedeskapi/request endpoint is called. This occurs when the Jira project configuration was updated (new request type added or old one renamed/deleted) but the REQUEST_TYPE_ID in the .env file was not updated to reflect the change.
+
+SYSTEMIC CAUSE:
+There is no validation step on application startup that verifies the configured SERVICE_DESK_ID and REQUEST_TYPE_ID are still valid against the live Jira project before the application begins accepting traffic. Jira project configuration changes are performed by administrators without a corresponding process to notify the application team or trigger a configuration review. This represents a configuration drift gap — the actual Jira configuration diverged from the application's expected configuration without detection. A problem management task should be created to add a startup health check that validates Jira credentials and request type IDs against the live API and fails fast with a clear error message if they are invalid.
+
+## Affected Component
+Jira Service Management API — REQUEST_TYPE_ID Configuration (jira_service.create_ticket)
+
+## Confidence
+HIGH
+Component 3: CMP006 - Customer Support UI (empty body)
+RCA sub-page title: RCA - Customer Support UI
+Label: rca-kb
+## Keywords
+support UI crash, customer UI not loading, white screen, React error, component crash, UI exception, frontend crash, support portal error, rendering failure
+
+## Symptoms
+The Customer Support UI displays a white screen or an unhandled React exception banner. The error typically occurs when navigating to the ticket view or when a specific ticket card attempts to render. Browser console shows a JavaScript TypeError or a cannot read properties of undefined error. The issue may affect a specific ticket or all tickets of a certain type.
+
+## Root Cause
+TECHNICAL CAUSE:
+The Customer Support UI is crashing due to a null dereference in the TicketCard component. A ticket row returned from the GET /api/tickets endpoint is missing one or more expected fields (typically app_name, component_name, or urgency) that the component attempts to render without a null guard. When TicketCard tries to access t.app_name.toLowerCase() or similar, the JavaScript runtime throws a TypeError which propagates up as an unhandled React render exception, crashing the entire component tree and displaying a white screen.
+
+SYSTEMIC CAUSE:
+The TicketCard component was written assuming all ticket fields are always present, without defensive null checks on optional fields that may be absent for older tickets created before the app_name and component_name columns were added to the schema. No schema migration backfill was performed on existing ticket rows when the new columns were added, leaving them with NULL values. This represents a deferred maintenance issue — the schema migration was deployed without a corresponding data backfill task. A problem management task should be created to run a backfill query setting default values for all NULL app_name and component_name fields, and to add null-safe rendering to all TicketCard field accesses.
+
+## Affected Component
+Customer Support UI — TicketCard.jsx (Null Field Access on Optional Ticket Properties)
+
+## Confidence
+HIGH
+
+AMS003 — Production Monitoring Hub
+App page title: AMS003 - Production Monitoring Hub (empty body)
+Component 1: CMP007 - Log Aggregation Service (empty body)
+RCA sub-page title: RCA - Log Aggregation Service
+Label: rca-kb
+## Keywords
+logs not appearing, log ingestion stopped, missing logs, log pipeline failure, log backlog, log drop, log aggregation down, no logs in dashboard, log service unresponsive
+
+## Symptoms
+Production logs stop appearing in the monitoring dashboard. Log entries from the previous period are present but new entries are absent. The log aggregation service process is running but the logs_buffer in memory is not being updated. API calls to GET /api/logs return stale data. No errors are visible in the application terminal.
+
+## Root Cause
+TECHNICAL CAUSE:
+The Log Aggregation Service's in-memory logs_buffer has reached its 100-entry cap and is silently discarding new log entries without any alert or backpressure signal. The add_log() function uses a pop(0) eviction strategy which removes the oldest entry when the buffer is full, but the source of log generation (high-frequency duplicate detection and embedding calls) is producing logs at a rate that fills the buffer within minutes of application startup. The dashboard only ever shows the last 100 logs, and during high-traffic periods the most recent meaningful events are overwritten before they can be viewed.
+
+SYSTEMIC CAUSE:
+The in-memory log buffer was designed with a fixed 100-entry cap that was appropriate for low-volume testing but was never re-evaluated as production traffic scaled. There is no alerting when the buffer fill rate exceeds a threshold that would indicate logs are being dropped, and no persistent log storage was implemented before the production go-live. This represents a capacity planning failure combined with absent monitoring on the monitoring system itself. A problem management task should be created to integrate a persistent logging backend (such as BetterStack or Supabase ticket_events table) and to increase or make configurable the in-memory buffer size with a fill-rate alert.
+
+## Affected Component
+Log Aggregation Service — logs_buffer (In-Memory Buffer Capacity — log_routes.py)
+
+## Confidence
+HIGH
+Component 3: CMP009 - Monitoring Dashboard (empty body)
+RCA sub-page title: RCA - Monitoring Dashboard
+Label: rca-kb
+## Keywords
+monitoring dashboard slow, dashboard timeout, dashboard not responding, metrics not loading, high latency dashboard, dashboard hang, slow page load, GET /tickets slow
+
+## Symptoms
+The Monitoring Dashboard takes more than 10 seconds to load or times out entirely. The GET /api/tickets endpoint is slow to respond. The dashboard renders partially then freezes. The issue is worse during business hours and improves at night. Other API endpoints respond normally.
+
+## Root Cause
+TECHNICAL CAUSE:
+The Monitoring Dashboard's GET /api/tickets endpoint is performing a full-table SELECT * FROM tickets query without pagination, ordering, or index utilisation. As the tickets table grows beyond tens of thousands of rows, this query performs a sequential scan and returns the entire dataset to the Python application, which then processes it in memory. The ticket_repository.get_all_tickets() function has no limit or cursor parameter, meaning every dashboard load fetches every ticket ever created regardless of the user's view window.
+
+SYSTEMIC CAUSE:
+The get_all_tickets() function was implemented without pagination during initial development when the table had fewer than 100 rows. No performance baseline or query plan review was conducted before production deployment, and no alert was configured for endpoint response times exceeding 2 seconds. The problem was not detectable in development but became critical as production data volume grew. This represents both a knowledge gap in database query design for growing datasets and an absent performance monitoring coverage gap. A problem management task should be created to add LIMIT/OFFSET pagination to get_all_tickets(), add a created_at DESC index, and configure a p95 response time alert on the /api/tickets endpoint.
+
+## Affected Component
+Monitoring Dashboard — GET /api/tickets (ticket_repository.get_all_tickets — Full Table Scan)
+
+## Confidence
+HIGH
+
+AMS004 — Change & Release Management System
+App page title: AMS004 - Change & Release Management System (empty body)
+Component 1: CMP010 - Release Scheduler (empty body)
+RCA sub-page title: RCA - Release Scheduler
+Label: rca-kb
+## Keywords
+release not scheduled, deployment failed to trigger, scheduled release missed, release window missed, cron job failed, scheduler not running, release automation down
+
+## Symptoms
+A scheduled release did not execute at the configured time. No deployment was triggered. The scheduler process appears to be running but no release tasks were initiated. Logs show the scheduler woke up at the scheduled time but no job was dispatched. The issue occurred for one specific release window or all releases in a time period.
+
+## Root Cause
+TECHNICAL CAUSE:
+The Release Scheduler failed to dispatch the deployment job because the release record in Supabase had a status of 'Draft' rather than 'Approved' at the time the scheduler evaluated it. The scheduler's query filters for records with status = 'Approved' before dispatching, and the approval workflow did not complete before the release window opened. The approval was pending because the approval notification email was not delivered due to an SMTP queue backup (unrelated to this component), meaning the approver was unaware that action was required.
+
+SYSTEMIC CAUSE:
+The release approval process has a single notification channel (email) with no fallback or escalation path if the primary notification fails. There is no monitoring on pending approvals that are approaching their release window, and no automatic escalation is triggered when an approval remains in a pending state within a configurable time before the scheduled release. This represents a process gap in the change management workflow — specifically the absence of pre-release window approval status validation and multi-channel notification. A problem management task should be created to implement a pre-release-window check that alerts via Slack and email when an approval is still pending 2 hours before the scheduled release time.
+
+## Affected Component
+Release Scheduler — Approval Status Validation (Supabase release_records table — status filter)
+
+## Confidence
+MEDIUM
+Component 3: CMP012 - Release Tracking Portal (empty body)
+RCA sub-page title: RCA - Release Tracking Portal
+Label: rca-kb
+## Keywords
+release tracking not updating, deployment status stale, release status wrong, tracker not reflecting deployment, status not refreshing, release portal outdated, tracking portal showing old data
+
+## Symptoms
+The Release Tracking Portal shows an incorrect or outdated deployment status. A release that completed successfully still shows as In Progress or Pending. The portal does not reflect the latest deployment state even after a manual page refresh. The correct status is visible in Jira but not in the tracking portal.
+
+## Root Cause
+TECHNICAL CAUSE:
+The Release Tracking Portal is displaying stale data because the frontend useTickets hook caches the ticket list in React state and does not trigger a re-fetch after a status change event. When the deployment validation engine updates the ticket status via PUT /api/tickets/{key}/complete, the change is persisted to Supabase and Jira, but the Release Tracking Portal's React component tree is not notified. The portal only re-fetches ticket data on initial page load (via useEffect with an empty dependency array), meaning status changes made after load are invisible until the user refreshes the browser.
+
+SYSTEMIC CAUSE:
+The frontend data layer has no real-time subscription or polling mechanism to detect server-side status changes after initial page load. The decision to use a static fetch-on-mount pattern was made for simplicity but was not revisited when the system began handling live deployment status updates that needed to be reflected in near-real-time. This represents an architectural weakness in the frontend data synchronisation design. A problem management task should be created to implement either a Supabase real-time subscription on the tickets table or a configurable polling interval in the useTickets hook for pages that display live deployment status.
+
+## Affected Component
+Release Tracking Portal — useTickets.js (Frontend State Stale — No Real-Time Subscription)
+
+## Confidence
+HIGH
+
+AMS005 — Application Health Intelligence Platform
+App page title: AMS005 - Application Health Intelligence Platform (empty body)
+Component 1: CMP013 - Health Data Collector (empty body)
+RCA sub-page title: RCA - Health Data Collector
+Label: rca-kb
+## Keywords
+health data missing, metrics not collected, health collector down, health check failing, collector not sending data, health metrics gap, telemetry missing, health data gap
+
+## Symptoms
+The Application Health dashboard shows gaps in health metric data. Time-series charts show flat lines or missing data points for a period. The health data collector process is running but no new data appears in the monitoring store. The issue may be intermittent or continuous.
+
+## Root Cause
+TECHNICAL CAUSE:
+The Health Data Collector is failing to send metrics because the target health check endpoints of the monitored services are returning non-200 responses (typically 503 during deployments or 401 after credential rotation) and the collector's error handling silently swallows these failures without retrying or logging them to the alert channel. The collector uses a fire-and-forget HTTP call pattern with a bare try/except that catches all exceptions and continues to the next target, meaning collection failures are invisible in the main log stream. Data gaps correspond exactly to periods when monitored services were restarting or had rotated credentials.
+
+SYSTEMIC CAUSE:
+The health data collector was implemented with defensive error handling that was intended to prevent a single failing target from stopping collection for all targets, but the implementation went too far — errors are completely silenced with no alerting, no retry, and no dead-letter storage for failed collections. There is no monitoring on the collector itself to detect when its successful collection rate drops below a threshold. This represents a monitoring gap on the monitoring system. A problem management task should be created to add structured error logging to the collector, implement a configurable retry with exponential backoff for failed targets, and add a collection success rate metric with an alert when it drops below 95%.
+
+## Affected Component
+Health Data Collector — HTTP Collection Loop (Silent Error Swallowing — health_collector.py)
+
+## Confidence
+HIGH
+Component 3: CMP015 - Application Health Dashboard (empty body)
+RCA sub-page title: RCA - Application Health Dashboard
+Label: rca-kb
+## Keywords
+health dashboard error, RCA not loading, copilot RCA failing, RCA modal blank, RCA confidence always low, AI RCA not working, Groq API error, LLM timeout, RCA generation failed
+
+## Symptoms
+The Application Health Dashboard's Copilot RCA feature is failing. Clicking the RCA button on a ticket card shows an error state or infinite spinner. Backend logs show the Groq API returning a 429 Too Many Requests or a 503 Service Unavailable. The issue affects all RCA requests simultaneously and resolves after a period of time.
+
+## Root Cause
+TECHNICAL CAUSE:
+The Copilot RCA feature is failing because the Groq API rate limit for the configured API key has been reached. The llama-3.3-70b-versatile model has per-minute token limits that are being exceeded when multiple tickets are submitted in rapid succession, each triggering a fresh RCA generation via the handle_rca_flow handler. Each fresh RCA generation makes 2–3 Groq API calls (generate_fresh_rca, is_same_issue verification, generate_clarification_questions on LOW confidence), meaning a burst of 5 simultaneous ticket submissions can produce 15 LLM calls within seconds. The Groq client raises an exception on the 429 response, which handle_rca_flow catches and returns as a LOW confidence error result.
+
+SYSTEMIC CAUSE:
+The RCA generation pipeline was designed without LLM call budgeting or rate limit awareness. There is no queuing, throttling, or backoff strategy for Groq API calls, and no monitoring alert for when the Groq error rate exceeds a threshold. The KB matching layer (Layer A) is intended to reduce LLM calls for known issue types, but the rca_knowledge_base was not populated before go-live, meaning all tickets are falling through to Layer C fresh generation. This represents both a capacity planning failure (rate limits not assessed before production) and a deferred maintenance issue (KB not populated before launch). A problem management task should be created to populate the rca_knowledge_base from Confluence, implement a request queue with configurable concurrency for Groq calls, and add a Groq API error rate alert.
+
+## Affected Component
+Copilot RCA Engine — Groq API Rate Limiting (modules/copilot_rca/agent.py — generate_fresh_rca)
+
+## Confidence
+HIGH

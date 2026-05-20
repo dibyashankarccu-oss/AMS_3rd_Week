@@ -1,104 +1,101 @@
 Ticket Table creation schema:
 
 -- =========================================
--- ENABLE EXTENSIONS
+-- EXTENSIONS
 -- =========================================
-
 CREATE EXTENSION IF NOT EXISTS vector;
 CREATE EXTENSION IF NOT EXISTS pgcrypto;
 
-
 -- =========================================
--- DROP OLD OBJECTS
+-- DROP IF EXISTS (SAFE RESET)
 -- =========================================
-
-DROP INDEX IF EXISTS tickets_embedding_idx;
-DROP INDEX IF EXISTS idx_ticket_issue;
-DROP INDEX IF EXISTS idx_ticket_status;
-DROP INDEX IF EXISTS idx_ticket_app;
-DROP INDEX IF EXISTS idx_ticket_component;
-
 DROP TABLE IF EXISTS tickets CASCADE;
 
-
 -- =========================================
--- CREATE NEW TICKETS TABLE
+-- TICKETS TABLE (CLEAN ARCHITECTURE)
 -- =========================================
-
 CREATE TABLE tickets (
 
-    -- Internal UUID
+    -- =====================================
+    -- IDENTIFIERS
+    -- =====================================
     id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
 
-    -- Jira identifiers
     issue_key TEXT UNIQUE NOT NULL,
     child_key TEXT UNIQUE,
     parent_ticket_key TEXT,
 
-    -- User info
+    -- =====================================
+    -- USER DETAILS
+    -- =====================================
     name TEXT NOT NULL,
     email TEXT NOT NULL,
 
-    -- Ticket content
+    -- =====================================
+    -- TICKET CONTENT
+    -- =====================================
     summary TEXT NOT NULL,
     description TEXT,
 
-    -- App details
-    app_name TEXT DEFAULT 'General',
-    component_name TEXT DEFAULT 'General',
+    -- =====================================
+    -- APPLICATION CONTEXT
+    -- =====================================
+    app_name TEXT,
+    app_code TEXT,
 
-    -- Classification
-    urgency TEXT,
-    impact TEXT,
+    component_name TEXT,
+    component_code TEXT,
 
-    -- Status
+    -- =====================================
+    -- PRIORITY CLASSIFICATION
+    -- =====================================
+    urgency TEXT NOT NULL,
+    impact TEXT NOT NULL,
+
+    -- =====================================
+    -- STATUS FLOW
+    -- =====================================
     status TEXT NOT NULL DEFAULT 'Open'
-    CHECK (
-        status IN (
-            'Open',
-            'Completed'
-        )
-    ),
+        CHECK (status IN ('Open', 'Open_no_SOP', 'Completed')),
 
-    -- Duplicate handling
+    -- =====================================
+    -- DUPLICATE MANAGEMENT
+    -- =====================================
     is_duplicate BOOLEAN DEFAULT FALSE,
+    duplicate_of TEXT,
 
-    -- =================================
-    -- VECTOR EMBEDDING
-    -- =================================
-
+    -- =====================================
+    -- VECTOR SEARCH (EMBEDDINGS)
+    -- =====================================
     embedding VECTOR(384),
+    embedding_model TEXT DEFAULT 'all-MiniLM-L6-v2',
 
-    -- =================================
-    -- RUNBOOK
-    -- =================================
-
-    paired_steps JSONB DEFAULT '[]'::jsonb,
-    runbook_title TEXT,
-    runbook_category TEXT,
+    -- =====================================
+    -- SOP / RUNBOOK DATA
+    -- =====================================
+    sop_title TEXT,
+    sop_confluence_id TEXT,
+    sop_url TEXT,
+    sop_category TEXT,
     match_type TEXT,
+    paired_steps JSONB DEFAULT '[]'::jsonb,
 
-    -- =================================
-    -- RCA
-    -- =================================
-
+    -- =====================================
+    -- RCA (ROOT CAUSE ANALYSIS)
+    -- =====================================
     rca_root_cause TEXT,
     rca_affected TEXT,
-
     rca_steps JSONB DEFAULT '[]'::jsonb,
-
     rca_confidence TEXT,
     rca_source TEXT,
     rca_matched_from TEXT,
     rca_matched_summary TEXT,
 
-    -- =================================
-    -- TIMESTAMPS
-    -- =================================
-
+    -- =====================================
+    -- AUDIT / TIMESTAMPS
+    -- =====================================
     created_at TIMESTAMPTZ DEFAULT NOW(),
     updated_at TIMESTAMPTZ DEFAULT NOW()
-
 );
 
 

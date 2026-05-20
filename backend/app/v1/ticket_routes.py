@@ -26,13 +26,13 @@ from services.jira_service import (
     unlink_duplicate_comments
 )
 
-
 from services.merge_service import merge_tickets
 
 from modules.pre_submission_search.handler import (
     search_similar_completed_tickets
 )
 from repositories.ticket_event_repository import log_event
+from services.app_service import get_apps_with_components
 
 router = APIRouter()
 
@@ -42,7 +42,6 @@ router = APIRouter()
 # ─────────────────────────────────────────────
 @router.post("/submit")
 async def submit(data: TicketRequest):
-
     result = await handle_ticket(data)
 
     if not isinstance(result, dict):
@@ -59,7 +58,6 @@ async def submit(data: TicketRequest):
 # ─────────────────────────────────────────────
 @router.get("/tickets")
 async def get_tickets():
-     
     tickets = await get_all_tickets()
 
     if not isinstance(tickets, list):
@@ -68,11 +66,8 @@ async def get_tickets():
     return tickets
 
 
-
-
 @router.get("/tickets/{issueKey}/complete-check")
 async def check_before_complete(issueKey: str):
-
     tickets = await get_all_tickets()
 
     current = next(
@@ -111,6 +106,7 @@ async def check_before_complete(issueKey: str):
         "message": "Safe to complete"
     }
 
+
 # ─────────────────────────────────────────────
 # COMPLETE TICKET CASCADE (UPDATED)
 # PARENT + ALL CHILDREN
@@ -118,7 +114,6 @@ async def check_before_complete(issueKey: str):
 # ─────────────────────────────────────────────
 @router.put("/tickets/{issueKey}/complete")
 async def complete_ticket(issueKey: str, force: bool = False):
-
     try:
 
         tickets = await get_all_tickets()
@@ -145,8 +140,8 @@ async def complete_ticket(issueKey: str, force: bool = False):
 
         # If child clicked → use parent
         parent_key = (
-            current.get("parent_ticket_key")
-            or current.get("issue_key")
+                current.get("parent_ticket_key")
+                or current.get("issue_key")
         )
 
         # ─────────────────────────────────────────────
@@ -241,7 +236,6 @@ import re
 
 @router.get("/tickets/search/{issueKey}")
 async def search_by_id(issueKey: str):
-
     try:
 
         tickets = await get_all_tickets()
@@ -301,9 +295,9 @@ async def search_by_id(issueKey: str):
                 "type": "success",
 
                 # IMPORTANT ORDER FOR UI
-                "child": current,          # show first
+                "child": current,  # show first
                 "parent_key": parent_key,  # display label
-                "parent": parent,          # full card
+                "parent": parent,  # full card
                 "children": children,
 
                 "mode": "child-view"
@@ -334,14 +328,11 @@ async def search_by_id(issueKey: str):
         }
 
 
-
-
 # ─────────────────────────────────────────────
 # MERGE TICKETS (DB ONLY)
 # ─────────────────────────────────────────────
 @router.post("/tickets/merge")
 async def merge_tickets_api(payload: dict):
-
     """
     payload:
     {
@@ -418,11 +409,8 @@ async def merge_tickets_api(payload: dict):
         }
 
 
-
-
 @router.put("/tickets/{issueKey}/detach")
 async def detach_ticket(issueKey: str):
-
     try:
 
         tickets = await get_all_tickets()
@@ -504,17 +492,15 @@ async def detach_ticket(issueKey: str):
         return {
             "type": "error",
             "message": str(e)
-        }   
+        }
+
+    # ─────────────────────────────────────────────
 
 
-
-
-# ─────────────────────────────────────────────
 # COMPLETE ONLY ONE TICKET
 # ─────────────────────────────────────────────
 @router.put("/tickets/{issueKey}/complete-single")
 async def complete_single_ticket(issueKey: str):
-
     try:
 
         from repositories.ticket_repository import (
@@ -525,8 +511,8 @@ async def complete_single_ticket(issueKey: str):
 
         if not ticket:
             return {
-                "type":"error",
-                "message":"Ticket not found"
+                "type": "error",
+                "message": "Ticket not found"
             }
 
         from services.jira_service import (
@@ -538,10 +524,9 @@ async def complete_single_ticket(issueKey: str):
         )
 
         if not jira_ok:
-
             return {
-                "type":"error",
-                "message":"Jira update failed"
+                "type": "error",
+                "message": "Jira update failed"
             }
 
         from repositories.ticket_repository import (
@@ -551,7 +536,7 @@ async def complete_single_ticket(issueKey: str):
         supabase.table(
             "tickets"
         ).update({
-            "status":"Completed"
+            "status": "Completed"
         }).eq(
             "issue_key",
             issueKey
@@ -565,22 +550,20 @@ async def complete_single_ticket(issueKey: str):
         )
 
         return {
-            "type":"success",
-            "message":"Single ticket completed"
+            "type": "success",
+            "message": "Single ticket completed"
         }
 
     except Exception as e:
 
         return {
-            "type":"error",
-            "message":str(e)
+            "type": "error",
+            "message": str(e)
         }
-
 
 
 @router.post("/tickets/pre-search")
 async def pre_submission_search(payload: dict):
-
     summary = payload.get("summary", "")
     description = payload.get("description", "")
 
@@ -608,20 +591,19 @@ async def pre_submission_search(payload: dict):
 # ─────────────────────────────────────────────
 @router.put("/tickets/{issueKey}/complete-children")
 async def complete_children_only(issueKey: str):
-
     try:
 
         ticket = await get_ticket(issueKey)
 
         if not ticket:
             return {
-                "type":"error",
-                "message":"Ticket not found"
+                "type": "error",
+                "message": "Ticket not found"
             }
 
         parent_key = (
-            ticket.get("parent_ticket_key")
-            or ticket["issue_key"]
+                ticket.get("parent_ticket_key")
+                or ticket["issue_key"]
         )
 
         children = await get_children(
@@ -630,8 +612,8 @@ async def complete_children_only(issueKey: str):
 
         if not children:
             return {
-                "type":"error",
-                "message":"No child tickets found"
+                "type": "error",
+                "message": "No child tickets found"
             }
 
         from services.jira_service import (
@@ -644,7 +626,6 @@ async def complete_children_only(issueKey: str):
 
         # Jira only for children
         for child in children:
-
             await update_jira_status(
                 child["issue_key"]
             )
@@ -662,13 +643,13 @@ async def complete_children_only(issueKey: str):
 
         if not db_ok:
             return {
-                "type":"error",
-                "message":"DB update failed"
+                "type": "error",
+                "message": "DB update failed"
             }
 
         return {
-            "type":"success",
-            "message":"All child tickets completed"
+            "type": "success",
+            "message": "All child tickets completed"
         }
 
     except Exception as e:
@@ -679,8 +660,23 @@ async def complete_children_only(issueKey: str):
         )
 
         return {
-            "type":"error",
-            "message":str(e)
+            "type": "error",
+            "message": str(e)
         }
 
 
+@router.get("/apps-with-components")
+async def apps_with_components():
+    try:
+        data = await get_apps_with_components()
+
+        return {
+            "type": "success",
+            "data": data
+        }
+
+    except Exception as e:
+        return {
+            "type": "error",
+            "message": str(e)
+        }

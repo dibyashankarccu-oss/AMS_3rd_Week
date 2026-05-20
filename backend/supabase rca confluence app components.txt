@@ -1,0 +1,327 @@
+-- ═══════════════════════════════════════════════════════════════════
+-- STEP 1: RUN THIS ENTIRE FILE IN SUPABASE SQL EDITOR
+-- It handles everything from scratch in the correct order.
+-- ═══════════════════════════════════════════════════════════════════
+
+-- ── EXTENSIONS ──
+CREATE EXTENSION IF NOT EXISTS vector;
+CREATE EXTENSION IF NOT EXISTS pgcrypto;
+
+
+-- ════════════════════════════════════════════════
+-- 1. APPS TABLE
+-- ════════════════════════════════════════════════
+CREATE TABLE IF NOT EXISTS ams_apps (
+    id         UUID PRIMARY KEY DEFAULT gen_random_uuid(),
+    app_code   TEXT UNIQUE NOT NULL,
+    app_name   TEXT NOT NULL,
+    created_at TIMESTAMPTZ DEFAULT NOW()
+);
+
+INSERT INTO ams_apps (app_code, app_name) VALUES
+    ('AMS001', 'Enterprise Incident Management System'),
+    ('AMS002', 'Customer Service Request Portal'),
+    ('AMS003', 'Production Monitoring Hub'),
+    ('AMS004', 'Change & Release Management System'),
+    ('AMS005', 'Application Health Intelligence Platform')
+ON CONFLICT (app_code) DO NOTHING;
+
+
+-- ════════════════════════════════════════════════
+-- 2. COMPONENTS TABLE
+-- ════════════════════════════════════════════════
+CREATE TABLE IF NOT EXISTS ams_components (
+    id             UUID PRIMARY KEY DEFAULT gen_random_uuid(),
+    app_id         UUID NOT NULL REFERENCES ams_apps(id) ON DELETE CASCADE,
+    component_code TEXT UNIQUE NOT NULL,
+    component_name TEXT NOT NULL,
+    created_at     TIMESTAMPTZ DEFAULT NOW()
+);
+
+INSERT INTO ams_components (app_id, component_code, component_name) VALUES
+    ((SELECT id FROM ams_apps WHERE app_code='AMS001'), 'CMP001', 'Ticket Intake API'),
+    ((SELECT id FROM ams_apps WHERE app_code='AMS001'), 'CMP002', 'Incident Prioritization Engine'),
+    ((SELECT id FROM ams_apps WHERE app_code='AMS001'), 'CMP003', 'Operations Dashboard'),
+    ((SELECT id FROM ams_apps WHERE app_code='AMS002'), 'CMP004', 'Request Submission Service'),
+    ((SELECT id FROM ams_apps WHERE app_code='AMS002'), 'CMP005', 'Approval Workflow Engine'),
+    ((SELECT id FROM ams_apps WHERE app_code='AMS002'), 'CMP006', 'Customer Support UI'),
+    ((SELECT id FROM ams_apps WHERE app_code='AMS003'), 'CMP007', 'Log Aggregation Service'),
+    ((SELECT id FROM ams_apps WHERE app_code='AMS003'), 'CMP008', 'Alert Correlation Engine'),
+    ((SELECT id FROM ams_apps WHERE app_code='AMS003'), 'CMP009', 'Monitoring Dashboard'),
+    ((SELECT id FROM ams_apps WHERE app_code='AMS004'), 'CMP010', 'Release Scheduler'),
+    ((SELECT id FROM ams_apps WHERE app_code='AMS004'), 'CMP011', 'Deployment Validation Engine'),
+    ((SELECT id FROM ams_apps WHERE app_code='AMS004'), 'CMP012', 'Release Tracking Portal'),
+    ((SELECT id FROM ams_apps WHERE app_code='AMS005'), 'CMP013', 'Health Data Collector'),
+    ((SELECT id FROM ams_apps WHERE app_code='AMS005'), 'CMP014', 'Root Cause Detection Agent'),
+    ((SELECT id FROM ams_apps WHERE app_code='AMS005'), 'CMP015', 'Application Health Dashboard')
+ON CONFLICT (component_code) DO NOTHING;
+
+
+-- ════════════════════════════════════════════════
+-- 3. RCA KNOWLEDGE BASE TABLE (recreate clean)
+-- ════════════════════════════════════════════════
+DROP TABLE IF EXISTS rca_knowledge_base CASCADE;
+
+CREATE TABLE rca_knowledge_base (
+    id                  BIGSERIAL PRIMARY KEY,
+    confluence_page_id  TEXT UNIQUE,
+    title               TEXT NOT NULL,
+    category            TEXT NOT NULL,
+    app_code            TEXT NOT NULL DEFAULT 'GEN',
+    app_name            TEXT NOT NULL DEFAULT 'General',
+    component_code      TEXT NOT NULL DEFAULT 'GEN-CMP',
+    component_name      TEXT NOT NULL DEFAULT 'General',
+    keywords            TEXT NOT NULL,
+    symptoms            TEXT NOT NULL,
+    root_cause          TEXT NOT NULL,
+    affected_component  TEXT NOT NULL,
+    confidence          TEXT NOT NULL CHECK (confidence IN ('HIGH','MEDIUM','LOW')),
+    environment         TEXT DEFAULT 'Production',
+    recurrence_count    INT  DEFAULT 1,
+    status              TEXT DEFAULT 'Active'
+        CHECK (status IN ('Active','Deprecated','Under Review')),
+    embedding           VECTOR(384),
+    created_at          TIMESTAMP DEFAULT NOW(),
+    updated_at          TIMESTAMP DEFAULT NOW()
+);
+
+CREATE INDEX IF NOT EXISTS idx_rca_kb_embedding
+ON rca_knowledge_base
+USING ivfflat (embedding vector_cosine_ops)
+WITH (lists = 100);
+
+
+-- ════════════════════════════════════════════════
+-- 4. match_rca_knowledge_base FUNCTION
+-- ════════════════════════════════════════════════
+DROP FUNCTION IF EXISTS match_rca_knowledge_base(VECTOR(384), INT);
+DROP FUNCTION IF EXISTS match_rca_knowledge_base(VECTOR(384), INT, TEXT, TEXT);
+
+CREATE OR REPLACE FUNCTION match_rca_knowledge_base(
+    query_embedding   VECTOR(384),
+    match_count       INT,
+    app_filter        TEXT DEFAULT NULL,
+    component_filter  TEXT DEFAULT NULL
+)
+RETURNS TABLE (
+    id                BIGINT,
+    title             TEXT,
+    category          TEXT,
+    app_code          TEXT,
+    app_name          TEXT,
+    component_code    TEXT,
+    component_name    TEXT,
+    keywords          TEXT,
+    symptoms          TEXT,
+    root_cause        TEXT,
+    affected_component TEXT,
+    confidence        TEXT,
+    similarity        FLOAT
+)
+LANGUAGE sql STABLE
+AS $$
+    SELECT
+        id, title, category,
+        app_code, app_name, component_code, component_name,
+        keywords, symptoms, root_cause, affected_component, confidence,
+        1 - (embedding <=> query_embedding) AS similarity
+    FROM rca_knowledge_base
+    WHERE
+        status    = 'Active'
+        AND embedding IS NOT NULL
+        AND (app_filter       IS NULL OR app_code       = app_filter)
+        AND (component_filter IS NULL OR component_code = component_filter)
+    ORDER BY embedding <=> query_embedding
+    LIMIT match_count;
+$$;
+
+
+-- ════════════════════════════════════════════════
+-- 5. TICKETS TABLE — patch existing table
+--    Drop old columns that are being removed,
+--    keep everything else intact.
+-- ════════════════════════════════════════════════
+ALTER TABLE tickets DROP COLUMN IF EXISTS rca_steps;
+ALTER TABLE tickets DROP COLUMN IF EXISTS rca_matched_from;
+ALTER TABLE tickets DROP COLUMN IF EXISTS rca_matched_summary;
+ALTER TABLE tickets
+ADD COLUMN IF NOT EXISTS app_code TEXT,
+ADD COLUMN IF NOT EXISTS app_name TEXT,
+ADD COLUMN IF NOT EXISTS component_code TEXT,
+ADD COLUMN IF NOT EXISTS component_name TEXT;
+
+-- ════════════════════════════════════════════════
+-- 6. match_tickets FUNCTION (fixed null-safe filters)
+-- ════════════════════════════════════════════════
+DROP FUNCTION IF EXISTS match_tickets(VECTOR(384), INT, TEXT, TEXT);
+
+CREATE OR REPLACE FUNCTION match_tickets(
+    query_embedding  VECTOR(384),
+    match_count      INT,
+    app_filter       TEXT DEFAULT NULL,
+    component_filter TEXT DEFAULT NULL
+)
+RETURNS TABLE (
+    id         UUID,
+    issue_key  TEXT,
+    child_key  TEXT,
+    summary    TEXT,
+    status     TEXT,
+    similarity FLOAT
+)
+LANGUAGE sql STABLE
+AS $$
+    SELECT
+        id, issue_key, child_key, summary, status,
+        1 - (embedding <=> query_embedding) AS similarity
+    FROM tickets
+    WHERE
+        embedding    IS NOT NULL
+        AND status   = 'Open'
+        AND is_duplicate = FALSE
+        AND child_key IS NULL
+        AND (app_filter       IS NULL OR app_code       = app_filter)
+        AND (component_filter IS NULL OR component_code = component_filter)
+    ORDER BY embedding <=> query_embedding
+    LIMIT match_count;
+$$;
+
+
+-- ════════════════════════════════════════════════
+-- 7. match_completed_tickets_with_rca FUNCTION
+--    (no rca_steps, no rca_matched_from/summary)
+-- ════════════════════════════════════════════════
+DROP FUNCTION IF EXISTS match_completed_tickets_with_rca(VECTOR(384), INT);
+
+CREATE OR REPLACE FUNCTION match_completed_tickets_with_rca(
+    query_embedding VECTOR(384),
+    match_count     INT
+)
+RETURNS TABLE (
+    id             UUID,
+    issue_key      TEXT,
+    summary        TEXT,
+    description    TEXT,
+    status         TEXT,
+    rca_root_cause TEXT,
+    rca_affected   TEXT,
+    rca_confidence TEXT,
+    rca_source     TEXT,
+    similarity     FLOAT
+)
+LANGUAGE sql STABLE
+AS $$
+    SELECT
+        id, issue_key, summary, description, status,
+        rca_root_cause, rca_affected, rca_confidence, rca_source,
+        1 - (embedding <=> query_embedding) AS similarity
+    FROM tickets
+    WHERE
+        embedding      IS NOT NULL
+        AND rca_root_cause IS NOT NULL
+        AND status     = 'Completed'
+        AND is_duplicate = FALSE
+        AND child_key  IS NULL
+    ORDER BY embedding <=> query_embedding
+    LIMIT match_count;
+$$;
+
+
+-- ════════════════════════════════════════════════
+-- 8. VERIFY
+-- ════════════════════════════════════════════════
+SELECT 'ams_apps rows:'       AS check, COUNT(*) FROM ams_apps;
+SELECT 'ams_components rows:' AS check, COUNT(*) FROM ams_components;
+SELECT 'rca_kb columns:'      AS check, column_name
+FROM information_schema.columns
+WHERE table_name = 'rca_knowledge_base'
+ORDER BY ordinal_position;
+SELECT 'tickets rca columns:' AS check, column_name
+FROM information_schema.columns
+WHERE table_name = 'tickets' AND column_name LIKE 'rca_%'
+ORDER BY ordinal_position;
+-- Expected tickets rca columns: rca_root_cause, rca_affected, rca_confidence, rca_source
+
+-- ═══════════════════════════════════════════════════════════════
+-- FIX: Add missing columns to tickets table + create ticket_events
+-- Run entirely in Supabase SQL Editor in one go.
+-- ═══════════════════════════════════════════════════════════════
+
+-- 1. Add urgency and impact to tickets (were in original schema but missing from live table)
+ALTER TABLE tickets ADD COLUMN IF NOT EXISTS urgency TEXT;
+ALTER TABLE tickets ADD COLUMN IF NOT EXISTS impact  TEXT;
+
+-- 2. Add duplicate_of column (referenced in schema)
+ALTER TABLE tickets ADD COLUMN IF NOT EXISTS duplicate_of TEXT;
+
+-- 3. Add escalation columns (referenced in some routes)
+ALTER TABLE tickets ADD COLUMN IF NOT EXISTS escalated_to       TEXT;
+ALTER TABLE tickets ADD COLUMN IF NOT EXISTS escalation_channel TEXT;
+ALTER TABLE tickets ADD COLUMN IF NOT EXISTS escalated_at       TIMESTAMPTZ;
+ALTER TABLE tickets ADD COLUMN IF NOT EXISTS resolved_at        TIMESTAMPTZ;
+ALTER TABLE tickets ADD COLUMN IF NOT EXISTS updated_at         TIMESTAMPTZ DEFAULT NOW();
+
+-- 4. Create ticket_events table (missing entirely)
+CREATE TABLE IF NOT EXISTS ticket_events (
+    id         UUID PRIMARY KEY DEFAULT gen_random_uuid(),
+    ticket_id  TEXT NOT NULL,
+    event      TEXT NOT NULL,
+    actor      TEXT DEFAULT 'system',
+    details    TEXT,
+    metadata   JSONB DEFAULT '{}'::jsonb,
+    created_at TIMESTAMPTZ DEFAULT NOW()
+);
+
+-- 5. Verify — should show urgency, impact, duplicate_of in results
+SELECT column_name, data_type
+FROM information_schema.columns
+WHERE table_name = 'tickets'
+AND column_name IN ('urgency', 'impact', 'duplicate_of', 'app_code', 'component_code',
+                    'rca_root_cause', 'rca_affected', 'rca_confidence', 'rca_source')
+ORDER BY column_name;
+
+-- 6. Verify ticket_events exists
+SELECT table_name FROM information_schema.tables
+WHERE table_name = 'ticket_events';
+
+-- ═══════════════════════════════════════════════════════════
+-- FIX match_tickets — filter by app_name and component_name
+-- (tickets table uses app_name/component_name not app_code/component_code)
+-- Run in Supabase SQL Editor
+-- ═══════════════════════════════════════════════════════════
+
+DROP FUNCTION IF EXISTS match_tickets(VECTOR(384), INT, TEXT, TEXT);
+
+CREATE OR REPLACE FUNCTION match_tickets(
+    query_embedding  VECTOR(384),
+    match_count      INT,
+    app_filter       TEXT DEFAULT NULL,
+    component_filter TEXT DEFAULT NULL
+)
+RETURNS TABLE (
+    id         UUID,
+    issue_key  TEXT,
+    child_key  TEXT,
+    summary    TEXT,
+    status     TEXT,
+    similarity FLOAT
+)
+LANGUAGE sql STABLE
+AS $$
+    SELECT
+        id, issue_key, child_key, summary, status,
+        1 - (embedding <=> query_embedding) AS similarity
+    FROM tickets
+    WHERE
+        embedding       IS NOT NULL
+        AND status      = 'Open'
+        AND is_duplicate = FALSE
+        AND child_key   IS NULL
+        AND (app_filter       IS NULL OR LOWER(COALESCE(app_name, ''))       = LOWER(app_filter))
+        AND (component_filter IS NULL OR LOWER(COALESCE(component_name, '')) = LOWER(component_filter))
+    ORDER BY embedding <=> query_embedding
+    LIMIT match_count;
+$$;
+
+-- Verify:
+SELECT proname FROM pg_proc WHERE proname = 'match_tickets';

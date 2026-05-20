@@ -442,37 +442,7 @@ export default function TicketCard({
             <span className="tc-field-value">{t.summary || "-"}</span>
           </FieldLabel>
 
-          <div className="tc-grid-2">
-            <FieldLabel label="Application">
-              <span
-                className="tc-field-value"
-                style={{
-                  display: "block",
-                  overflow: "hidden",
-                  textOverflow: "ellipsis",
-                  whiteSpace: "nowrap"
-                }}
-                title={t.app_name}
-              >
-                {t.app_name || "-"}
-              </span>
-            </FieldLabel>
 
-            <FieldLabel label="Component">
-              <span
-                className="tc-field-value"
-                style={{
-                  display: "block",
-                  overflow: "hidden",
-                  textOverflow: "ellipsis",
-                  whiteSpace: "nowrap"
-                }}
-                title={t.component_name}
-              >
-                {t.component_name || "-"}
-              </span>
-            </FieldLabel>
-          </div>
 
           <FieldLabel label="Description">
             <div>

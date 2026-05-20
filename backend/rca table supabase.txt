@@ -465,4 +465,3 @@ INSERT INTO rca_knowledge_base (
     'MEDIUM',
     'VPN Infrastructure'
 );
-
